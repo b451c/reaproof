@@ -1,5 +1,13 @@
 # ReaProof
 
+![platform: macOS](https://img.shields.io/badge/platform-macOS-informational)
+![Windows / Linux: WIP](https://img.shields.io/badge/Windows%20%2F%20Linux-WIP-lightgrey)
+![license: MIT](https://img.shields.io/badge/license-MIT-green)
+
+> **Platform: macOS today.** On Linux the platform-independent layers (trust machinery, audio
+> analysis) run in CI; the REAPER-driven planes are implemented (`provision/linux.py`) but not
+> yet verified there. **Windows: not yet.**
+
 **Trustworthy, automated testing for anything you build for REAPER - compiled plugins, native extensions, JSFX, and ReaScripts - by driving a real REAPER and asserting on the observable effect.**
 
 ReaProof loads your subject into a clean, isolated REAPER instance, drives it the way a user
@@ -147,7 +155,7 @@ compile your source - it tests the built subject by running it for real.
 
 **Requirements**
 
-- **macOS** (Apple Silicon or Intel) for the full feature set. Linux is CI-verified for the audio/bridge planes and the in-process visual/input path; Windows is not supported yet.
+- **macOS** (Apple Silicon or Intel) - the only fully supported platform today. On Linux the platform-independent layers (trust machinery, audio analysis) are CI-tested; the REAPER-driven planes are implemented (`provision/linux.py`) but **not yet CI-verified**. Windows is **not supported yet**.
 - **REAPER 7.x** - point `REAPROOF_REAPER_APP` at your install, or provision a pinned copy under `.cache/` for cross-machine determinism.
 - **Python 3.11+** (`pip install -e .`).
 - **Optional validators**: [clap-validator](https://github.com/free-audio/clap-validator), [pluginval](https://github.com/Tracktion/pluginval), `auval` (system). Missing ones are skipped, not failed.
@@ -182,10 +190,10 @@ docs/                USER_GUIDE.md, REFERENCE.md
 
 ## Status
 
-- **Audio + validator + load + parameter** planes: working on macOS, exercised by the suite and real plugins (CLAP/VST3/VST2; JSFX via the audio machinery).
-- **Visual capture + dual-channel + input synthesis**: working on macOS (and Linux for the in-process path).
-- **Extensions and ReaScripts**: driven through the bridge (load/run + assert on effect).
-- **Windows**: not yet. Contributions welcome - see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **macOS**: fully supported - audio + validator + load + parameter planes and visual capture + dual-channel + input synthesis, exercised by the suite and real plugins (CLAP/VST3/VST2; JSFX via the audio machinery; extensions and ReaScripts driven through the bridge).
+- **Linux**: the platform-independent layers are CI-tested; the REAPER-driven planes (`provision/linux.py`, in-process visual/input) are implemented but not yet CI-verified.
+- **Windows**: not yet.
+- Contributions welcome - see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
