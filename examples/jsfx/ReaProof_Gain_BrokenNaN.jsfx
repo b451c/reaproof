@@ -1,0 +1,24 @@
+desc:ReaProof Gain BROKEN (NaN at extreme)
+// Deliberately-broken variant of Subject #1: applies gain normally, but at high
+// settings (>= +18 dB) it emits a non-finite value (0/0 = NaN). Used to PROVE the
+// audio pathology detector FAILS a NaN-producing build (§1.7) rather than skipping it.
+
+slider1:0<-24,24,0.01>Gain (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@slider
+gain = 10^(slider1/20);
+nanmode = (slider1 >= 18) ? 1 : 0;
+
+@sample
+spl0 *= gain;
+spl1 *= gain;
+nanmode ? (
+  // 0/0 is NaN in EEL2: poison the stream at extreme gain.
+  spl0 += 0/0;
+  spl1 += 0/0;
+);

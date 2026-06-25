@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reaproof"
+version = "0.1.0"
+description = "Trustworthy, automated testing for REAPER plugins and extensions - point it at a plugin and get a real pass/fail."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ReaProof contributors" }]
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "soundfile>=0.12",
+  "pyloudnorm>=0.1.1",
+  "pillow>=10.0",
+  "pytest>=7.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+reaproof = "reaproof.runner.cli:main"
+
+# NOTE: the pytest plugin is opt-in (pass `-p reaproof.runner.pytest_plugin`), NOT a
+# global pytest11 entry point - so it never auto-loads into unrelated pytest runs.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Determinism: the harness never silently retries. Markers are declared, not magic.
+markers = [
+  "gate: a verification gate (must pass on real evidence)",
+  "negative_control: must FAIL as specified; proves a gate cannot pass falsely",
+  "reaper: requires a provisioned isolated REAPER instance",
+  "slow: launches REAPER / renders audio",
+]
+addopts = "-ra"

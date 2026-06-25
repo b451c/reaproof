@@ -1,0 +1,31 @@
+# Provisioned binaries + per-run working area (REAPER builds, validators, isolated
+# profiles, render scratch) - never committed; ReaProof reconstructs them.
+.cache/
+*.dmg
+*.zip
+*.tar.gz
+*.tar.xz
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+
+# Test run outputs / reports (the durable evidence is the run bundle under .cache)
+artifacts/
+_runs/
+report_html/
+*.log
+*.wav.tmp
+
+# OS noise
+.DS_Store
+
+# Track reference images on purpose (goldens are versioned)
+!goldens/**

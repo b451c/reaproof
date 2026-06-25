@@ -1,0 +1,38 @@
+desc:ReaProof Mute (toggle button)
+// Second reference control type for ReaProof: a 2-state TOGGLE drawn as a button.
+// Demonstrates the platform generalises beyond the rotary knob — button cells:
+// functional (the toggle param), DSP effect per state (Off = passthrough, On = mute),
+// visual on/off states, redraw-on-change, interaction (click toggles).
+
+slider1:0<0,1,1{Off,On}>Mute
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@sample
+slider1 >= 0.5 ? (
+  spl0 = 0;          // On  -> muted (silence)
+  spl1 = 0;
+);                   // Off -> passthrough (bit-transparent null vs input)
+
+@init
+last_lmb = 0;
+
+@gfx 160 90
+// click toggles the state (rising edge of the left button), notifying the host
+lmb = mouse_cap & 1;
+(lmb && !last_lmb) ? (
+  slider1 = slider1 >= 0.5 ? 0 : 1;
+  slider_automate(slider1);
+);
+last_lmb = lmb;
+
+gfx_clear = 0x202020;
+on = slider1 >= 0.5;
+on ? gfx_set(0.18, 0.82, 0.30, 1) : gfx_set(0.34, 0.34, 0.40, 1);   // green on / gray off
+gfx_rect(18, 18, gfx_w - 36, gfx_h - 36, 1);
+gfx_set(0.05, 0.05, 0.05, 1);
+gfx_x = 34; gfx_y = gfx_h * 0.42;
+on ? gfx_printf("MUTED") : gfx_printf("PASS");

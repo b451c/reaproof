@@ -1,0 +1,41 @@
+desc:ReaProof Gain BROKEN (ignores its parameter)
+// Deliberately-broken variant of Subject #1: the Gain slider exists and the knob is
+// drawn at the right angle, but @sample IGNORES the parameter (output == input).
+// Used to PROVE the DSP gate catches a control that stores a value but does nothing:
+// asserting "-6 dB at the output" must go RED for this build. (Its visual/value
+// channel still looks correct — exactly the logic/draw divergence the platform exists
+// to catch.)
+
+slider1:0<-24,24,0.01>Gain (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@slider
+gain = 10^(slider1/20);   // computed but never applied
+
+@sample
+// BROKEN: gain intentionally not applied.
+spl0 = spl0;
+spl1 = spl1;
+
+@gfx 220 220
+function draw_knob(cx, cy, r, val, vmin, vmax) local(frac, ang, ix, iy)
+(
+  gfx_set(0.13, 0.13, 0.15, 1); gfx_circle(cx, cy, r, 1, 1);
+  gfx_set(0.40, 0.40, 0.46, 1); gfx_circle(cx, cy, r, 0, 1);
+  frac = (val - vmin) / (vmax - vmin);
+  ang  = (frac * 270 - 135) * $pi / 180;
+  ix = cx + sin(ang) * (r - 7);
+  iy = cy - cos(ang) * (r - 7);
+  gfx_set(0.92, 0.72, 0.20, 1);
+  gfx_line(cx, cy, ix, iy, 1);
+  gfx_circle(ix, iy, 4, 1, 1);
+);
+gfx_clear = 0x202020;
+draw_knob(gfx_w * 0.5, gfx_h * 0.55, min(gfx_w, gfx_h) * 0.38, slider1, -24, 24);
+gfx_set(0.85, 0.85, 0.85, 1);
+gfx_x = 6; gfx_y = 6;
+gfx_printf("%.2f dB", slider1);

@@ -1,0 +1,27 @@
+name: ci
+
+# The platform-independent trust machinery + audio analysis run on every OS. The
+# REAPER-driven gates need a provisioned REAPER + display; running them in CI is a TODO
+# (the provisioner uses a locally-provisioned REAPER - see the README/USER_GUIDE).
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  units:
+    name: units (no REAPER) ${{ matrix.os }} py${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: pip install -e .
+      - name: Trust machinery + analysis (platform-independent)
+        run: python -m pytest tests/ -m "not reaper and not slow" -q
