@@ -1,39 +1,72 @@
 # ReaProof
 
-**Trustworthy, automated testing for REAPER plugins and extensions - point it at a plugin and get a real pass/fail, no test code required.**
+**Trustworthy, automated testing for anything you build for REAPER - compiled plugins, native extensions, JSFX, and ReaScripts - by driving a real REAPER and asserting on the observable effect.**
 
-ReaProof loads your compiled plugin into a clean, isolated REAPER instance, renders real
-audio through it, reads the real project state, and asserts on the *observable effect* -
-never on a mocked or simulated value. It is built around one rule:
+ReaProof loads your subject into a clean, isolated REAPER instance, drives it the way a user
+would, renders real audio, captures real pixels from the real window, reads the real project
+state, and asserts on what actually happened - never on a mocked or simulated value. It is
+built around one rule:
 
-> **A green result must mean the plugin genuinely works. A red result must mean something
-> genuinely broke. The tool must never produce a false result.**
+> **A green result must mean it genuinely works. A red result must mean something genuinely
+> broke. The tool must never produce a false result.**
 
-Every check is *mutation-verified*: before a check is trusted, ReaProof proves it can
-actually fail (e.g. by injecting a NaN, or perturbing the signal). A check that cannot be
-made to fail is reported as vacuous, not green.
+Every check is *mutation-verified*: before a check is trusted, ReaProof proves it can actually
+fail (e.g. by injecting a NaN, or perturbing the signal). A check that cannot be made to fail
+is reported as vacuous, not green.
 
 ---
 
-## Quickstart
+## Quickstart (zero-code, for a compiled audio plugin)
 
 ```bash
 pip install -e .
-
-# point ReaProof at your REAPER (or provision the pinned one - see Setup)
-export REAPROOF_REAPER_APP=/Applications/REAPER.app
-
-reaproof doctor                              # check the environment
-reaproof test /path/to/MyPlugin.clap         # run the universal battery - no test code
+export REAPROOF_REAPER_APP=/Applications/REAPER.app   # point at your REAPER
+reaproof doctor                                        # check the environment
+reaproof test /path/to/MyPlugin.clap                   # universal battery - no test code
 open .cache/runs/autotest-MyPlugin/report.html
 ```
 
-That's it. You do **not** write any test code to get a real, trustworthy QA gate.
+For a compiled audio plugin you write **no test code at all** to get a real QA gate.
 
-## What `reaproof test` checks (zero code)
+## What you can test
 
-Point it at a `.clap`, `.vst3`, or `.vst` and it runs a universal battery, all derived
-from the plugin itself:
+ReaProof is not only an audio-plugin tester. It can drive **any** REAPER subject and assert on
+the real effect. The "zero-code" universal battery applies to compiled audio plugins (they have
+a standard shape: parameters + audio I/O that ReaProof can auto-discover and exercise).
+Everything else does arbitrary things, so it needs a **short spec** - a few lines saying *what*
+should be true after you drive it - written with the authoring API. All of it uses the same
+trust machinery (assert-on-effect, mutation-verified, deterministic).
+
+| Subject | How ReaProof tests it | Zero-code? |
+|---|---|---|
+| **Compiled audio plugin** - CLAP, VST3, VST2 | `reaproof test <plugin>`: validator, load, pathology-free audio, determinism, full parameter-range sweep | ✅ **yes** |
+| **JSFX** (REAPER's text DSP) | render audio through it + analyse; dual-channel knob/control checks. Reference subjects ship in `examples/jsfx/` | short spec |
+| **Native extension** (`reaper_*.dylib` / `.so` / `.dll`) | load checkpoint + action registration, then drive its actions and assert on the resulting project state / rendered audio | short spec |
+| **ReaScript** - Lua / EEL (and Python, if enabled) | run the script or its action through the in-REAPER bridge, then assert on the observable effect (state, items, audio, `@gfx` pixels) | short spec |
+| **Audio Unit (AU)** | conformance via `auval` (out-of-process) | validator only |
+
+A short spec looks like this (drive the subject, then assert on the effect, read back a
+different way than you set it):
+
+```python
+from reaproof.runner.session import ReaperSession
+
+with ReaperSession() as s:
+    # ... set up project state, then run the subject (an action id, a script, an FX) ...
+    s.eval("reaper.Main_OnCommand(reaper.NamedCommandLookup('_MY_SCRIPT'), 0)")
+    # assert on the OBSERVABLE effect
+    markers = s.eval("return reaper.CountProjectMarkers(0)")
+    assert markers == 1, "the script did not place exactly one marker"
+```
+
+The authoring API also gives one-liners for the common audio/visual cases
+(`assert_gain_db`, `assert_state_roundtrip`, `knob_editor(...).assert_dual_channel(...)`).
+See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) and [`examples/`](examples/).
+
+## What `reaproof test` checks (the zero-code battery)
+
+Point it at a `.clap`, `.vst3`, or `.vst` and it runs a universal battery, all derived from
+the plugin itself - no knowledge of what the plugin "does" is required:
 
 | Check | What it proves |
 |---|---|
@@ -50,94 +83,109 @@ ReaProof - universal test of MyPlugin.clap
   [PASSED   ] load: plugin instantiates in REAPER - fx=0 nparams=12
   [PASSED   ] audio: silence is pathology-free
   [PASSED   ] audio: silence in -> silence out
-  [PASSED   ] audio: sine_1k is pathology-free
-  [PASSED   ] audio: noise is pathology-free
-  [PASSED   ] audio: impulse is pathology-free
-  [PASSED   ] audio: sweep is pathology-free
-  [PASSED   ] audio: fullscale_sine is pathology-free
+  [PASSED   ] audio: sine_1k / noise / impulse / sweep / fullscale_sine - pathology-free
   [PASSED   ] determinism: re-render is bit-identical
-  [PASSED   ] param sweep [0] Cutoff: stable across range
-  ...
+  [PASSED   ] param sweep [0..N] every parameter stable across range
 GREEN OK  passed 18 - failed 0 - skipped 0
 ```
 
-Useful flags: `--full` (sweep all parameters, no cap), `--no-sweep`, `--instrument`
-(a generator: skip the silence-in/silence-out check), `--out DIR`.
+Flags: `--full` (sweep all parameters, no cap), `--no-sweep`, `--instrument` (a generator:
+skip the silence-in/silence-out check), `--out DIR`.
 
-## Optional: semantic ("does it do the right thing") tests
+## What ReaProof observes (the four planes)
 
-The universal battery proves a plugin loads, is stable, deterministic, and never emits
-garbage. To additionally assert *what* it should do - "this gain is exactly -6 dB", "the
-reverb tail grows with the size knob", "the knob's drawn angle matches its value" - you
-write a short spec with the authoring API. These are a few lines each, mutation-verified
-the same way. See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) and the worked example in
-[`examples/`](examples/). This is optional; the universal battery needs nothing but the plugin.
+The reason it can assert on real behaviour is that it observes the subject four independent ways:
+
+- **Audio** - offline `-renderproject` to real samples, analysed with NumPy/SciPy: RMS, peak,
+  true-peak, LUFS, spectral centroid, null tests, and pathology detection (NaN / Inf / denormal
+  storms / DC offset / clicks). Crash, hang, or NaN is a hard fail, never a skip.
+- **Visual** - capture the real plugin/JSFX window pixels and compare with a tiered diff
+  (exact hash -> perceptual -> SSIM/deltaE), with versioned **goldens** and an explicit approval
+  step (never auto-updated), plus a glitch check for black/blank frames. **Dual-channel**: a
+  value-bearing control (e.g. a rotary knob) is cross-checked by measuring its *drawn* angle from
+  pixels and comparing it to the value the plugin *reports* - catching a GUI that lies about its
+  engine, or vice versa.
+- **State** - set a value one way, read it back a *different* way (through the saved project
+  chunk / a reload), so you test real persistence, not the variable you just wrote.
+- **Input** - synthesise real gestures (mouse drag / click / wheel) against the real window, to
+  test that dragging a control actually moves the value *and* the drawn pixels.
+
+## What makes a green trustworthy
+
+- **Assert on the effect, never on the value you set** (rendered audio, captured pixels, state read back a different way).
+- **Mutation-verification** - every check is proven able to fail; a check that cannot be killed is reported vacuous, not green.
+- **Determinism + quarantine** - each gate runs more than once; if results disagree the test is *quarantined* (surfaced, excluded from green), never retried-to-green.
+- **Validators** run out-of-process so a plugin crash becomes a result, not a tool failure.
+- **Provenance** - every result carries a manifest (OS, REAPER build, sample rate, tool versions, input/output hashes) and artifacts, so any result is independently reproducible.
+- **Reports** - JUnit (CI), JSON (machines), HTML (humans), with the mutation status visible per check.
 
 ## How it works
 
 ```
-reaproof test <plugin>
-      |
-      v
- Provisioner  ->  isolated REAPER (your install, hermetic profile, never touches your config)
-      |
-      +-- Validator         (clap-validator / pluginval, out-of-process)
-      +-- Control bridge     (in-REAPER Lua, file-queue IPC + heartbeat for hang detection)
-      +-- Observation:
-           - audio: offline render -> NumPy/SciPy analysis (RMS, true-peak, LUFS, spectrum, pathologies)
-           - state: read back a different way than you set it
-           - visual: capture the real plugin window + dual-channel cross-check (needs js_ReaScriptAPI)
-      |
-      v
- Report (JUnit + JSON + HTML) with a provenance manifest - independently reproducible
+reaproof test <plugin>   |   a custom spec (pytest)   |   the agentic build loop calling either
+        |
+        v
+ Provisioner  ->  isolated REAPER (your install, hermetic profile; never touches your real config)
+        |
+        +-- Validator         (clap-validator / pluginval / auval, out-of-process)
+        +-- Control bridge     (in-REAPER Lua, file-queue IPC + heartbeat for hang detection)
+        +-- Observation        (audio render+analysis / visual capture+dual-channel / state / input)
+        |
+        v
+ Report (JUnit + JSON + HTML) + provenance manifest
 ```
 
-Compiled plugins are loaded the way REAPER really loads them (`TrackFX_AddByName`), with
-the subject exposed to REAPER hermetically (CLAP via the standard `CLAP_PATH`), and their
-parameters driven by automation envelopes so the value actually takes effect at render time.
+Compiled plugins are loaded the way REAPER really loads them (`TrackFX_AddByName`); the subject is
+exposed hermetically (CLAP via the standard `CLAP_PATH`), and parameters are driven by automation
+envelopes so the value actually takes effect at render time. Extensions are installed into the
+isolated profile's `UserPlugins` and driven through their registered actions. ReaProof is a
+**verification layer**: in an agent-driven build loop it provides the trustworthy green/red and
+the detailed report that the agent (or you) acts on to correct the code; it does not read or
+compile your source - it tests the built subject by running it for real.
 
 ## Setup
 
 **Requirements**
 
-- **macOS** (Apple Silicon or Intel). Linux is CI-verified for the audio/bridge planes; Windows is not supported yet.
-- **REAPER 7.x** - point `REAPROOF_REAPER_APP` at it, or provision a pinned copy under `.cache/` for cross-machine determinism.
-- **Python 3.11+** with the dependencies in `pyproject.toml` (`pip install -e .`).
-- **Optional validators**: [clap-validator](https://github.com/free-audio/clap-validator) and/or [pluginval](https://github.com/Tracktion/pluginval). Missing ones are skipped, not failed.
+- **macOS** (Apple Silicon or Intel) for the full feature set. Linux is CI-verified for the audio/bridge planes and the in-process visual/input path; Windows is not supported yet.
+- **REAPER 7.x** - point `REAPROOF_REAPER_APP` at your install, or provision a pinned copy under `.cache/` for cross-machine determinism.
+- **Python 3.11+** (`pip install -e .`).
+- **Optional validators**: [clap-validator](https://github.com/free-audio/clap-validator), [pluginval](https://github.com/Tracktion/pluginval), `auval` (system). Missing ones are skipped, not failed.
 - **Optional REAPER extensions** for the visual/input planes: js_ReaScriptAPI, SWS, ReaImGui. The audio battery does not need them.
 
-Run `reaproof doctor` to see exactly what is present. Anything missing is reported with a hint.
-
-**Notes**
-
-- ReaProof assembles a throwaway, isolated REAPER profile per run; it never reads or writes your real REAPER configuration or plugins.
-- The first run may scan your installed plugins (REAPER does this at startup). If a plugin on your system hangs REAPER's scanner, see [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) (Troubleshooting).
-- macOS visual tests require Screen Recording permission for your terminal.
+Run `reaproof doctor` to see exactly what is present; anything missing is reported with a hint.
+ReaProof assembles a throwaway, isolated REAPER profile per run and never reads or writes your
+real REAPER configuration or plugins. macOS visual tests need Screen Recording permission for
+your terminal. See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) for the worked tutorials and troubleshooting.
 
 ## CLI
 
 ```
 reaproof doctor                 # environment health
-reaproof test <plugin> [opts]   # universal zero-code battery
-reaproof run [paths] [opts]     # run a folder of custom pytest specs (report + repeat + mutation-check)
+reaproof test <plugin> [opts]   # universal zero-code battery (compiled audio plugins)
+reaproof run [paths] [opts]     # run custom pytest specs (report + repeat/quarantine + mutation-check)
+reaproof init <dir>             # scaffold a tests folder
+reaproof new-test [opts]        # generate a test from a template
 reaproof goldens list|approve   # review/approve reference images (never auto-updated)
 ```
 
 ## Project layout
 
 ```
-src/reaproof/        the platform (provision, control, observe/{audio,visual,input}, validators, report, runner)
+src/reaproof/        the platform: provision/ control/ observe/{audio,visual,input}/ validators/
+                     coverage/ report/ runner/{autotest,cli,pytest_plugin,quarantine}/ authoring · mutation · determinism
 bridge/              the in-REAPER Lua control bridge
-examples/            reference subjects (a JSFX gain knob, a CLAP gain) + a worked custom test
+examples/            reference subjects (JSFX gain knob + broken variants, a CLAP gain) + a worked custom test
 tests/               the platform's own test suite (it tests itself)
 docs/                USER_GUIDE.md, REFERENCE.md
 ```
 
 ## Status
 
-- Audio + validator + load + parameter planes: working on macOS, exercised by the test suite and real plugins.
-- Visual capture + dual-channel + input synthesis: working on macOS (and Linux for the in-process path).
-- Windows: not yet. Contributions welcome.
+- **Audio + validator + load + parameter** planes: working on macOS, exercised by the suite and real plugins (CLAP/VST3/VST2; JSFX via the audio machinery).
+- **Visual capture + dual-channel + input synthesis**: working on macOS (and Linux for the in-process path).
+- **Extensions and ReaScripts**: driven through the bridge (load/run + assert on effect).
+- **Windows**: not yet. Contributions welcome - see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
