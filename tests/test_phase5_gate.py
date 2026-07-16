@@ -1,4 +1,4 @@
-"""Phase 5 verification gate (§14) — host (macOS) portion.
+"""Phase 5 verification gate (AGENT_BUILD_GUIDE §14) — host (macOS) portion.
 
 GATE (host): a window moved to a second monitor renders and reports correctly
 (dual-channel still agrees); a DPI/size clipping regression is caught.

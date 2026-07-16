@@ -82,6 +82,23 @@ Representative functions (full list at the ReaScript API docs):
 
 > Check exact, current signatures in the searchable ReaScript API doc (X‑Raym mirror) — js_ functions are listed there alongside native ones.
 
+### 3.2b Input delivery on macOS — which channel reaches which target
+
+Verified on the pinned REAPER 7.75 (Quality Audit v2 #5). Three channels, three
+distinct reach profiles — using the wrong one fails *silently* (events vanish):
+
+| Target | Working channel | Notes |
+|---|---|---|
+| JSFX `@gfx` canvas | **OS-level CGEvent** (`WindowGesture`, `_MacMouse`) | The canvas reads the *real* OS mouse (`mouse_cap`); posted SWELL messages are ignored. |
+| Custom-drawn DlgProc chrome (extension nav bars, canvases) | **In-process `bridge_click`** (`WM_*BUTTONDOWN/UP` in client coords) | A CGEvent click to a non-key SWELL *dialog* is swallowed by Cocoa as an activation click — it never reaches the view. |
+| Standard SWELL dialog controls (Button, etc.) | **In-process `dialog_command`** (`WM_COMMAND` with the control ID) | Posted `BM_CLICK` and raw `WM_LBUTTON*` do **not** fire `BN_CLICKED` on SWELL — verified against the Actions window's Close button. |
+| Capture polls reading `GetCursorPos`/`GetAsyncKeyState` | **CGEvent press‑hold‑release** (`hold_click`) | A plain click is too fast to straddle a poll tick; hold ≥0.35 s. |
+| Text entry (focused window/modal) | **CGEvent unicode** (`type_text`) | Layout-independent; the caller must put focus on the target first (frontmost + `JS_Window_SetFocus`). |
+
+Gates: `tests/test_input_plane.py` (right-click bit observed via `JS_Mouse_GetState`,
+typed text observed via `gfx.getchar`, `WM_COMMAND` closing a real SWELL dialog —
+each with a mutation/negative control).
+
 ### 3.3 reapy (Python) — convenience layer
 `reapy.Project()`, object‑oriented tracks/items/FX; `reapy.reascript_api.*` exposes all RPR_* functions (and SWS/JS_API where present); use `with reapy.inside_reaper():` to batch and beat the external call ceiling. Enable distant API via `reapy.configure_reaper()` (writes config + starts a server on a port).
 
@@ -188,6 +205,14 @@ A test suite is "complete" for a control when every applicable cell is exercised
 | Custom canvas | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
 
 The coverage report compares this matrix against the control set the plugin actually exposes (derived from `clap-info` / `TrackFX_GetNumParams` / the developer manifest) and lists uncovered cells.
+
+**Known constraint — the Theme/skin column on macOS (D27):** the pinned `REAPER.app`
+declares `NSRequiresAquaSystemAppearance=true`, so the app is permanently light/Aqua and a
+system dark↔light flip can never reach `[NSApp effectiveAppearance]`. A "system theme"
+visual test on this build is vacuous and must be an **explicit skip** citing D27. (The pin
+is also why goldens reproduce across hosts regardless of the host's appearance setting.)
+Theme coverage, if ever needed, means an opt-in dark profile: a second app copy with the
+plist flag flipped, or seeding REAPER's own `.ReaperTheme` — see D27.
 
 ---
 

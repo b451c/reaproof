@@ -5,6 +5,16 @@ to the rim (the @gfx convention used by Subject #1), recover the indicator angle
 pixels and map it to the control's value. Comparing this against the value the plugin
 *reports* is what makes a visual test both precise and meaningful: a logic/draw
 divergence (engine says one thing, GUI draws another) is caught as a disagreement.
+
+CONSTRAINTS (calibrated for Subject #1's @gfx knob — verify before reusing):
+- the colour mask is WIDE (tol=70, and only an upper bound on blue): warm/brown
+  UI elements in the analysed region would enter the mask and drag the PCA fit;
+- the indicator must be the ONLY mask-coloured content below ``chrome_top_frac``
+  (a value readout or second warm element biases the line);
+- tip/base disambiguation assumes the denser blob sits at the TIP (the drawn
+  end-dot); a knob style with a dense centre hub can read ~180 degrees off.
+For a different knob style, recalibrate rgb/tol/region and re-run the mutation
+check (wrong-angle must turn RED) before trusting any reading.
 """
 from __future__ import annotations
 

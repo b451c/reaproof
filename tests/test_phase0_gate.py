@@ -1,4 +1,4 @@
-"""Phase 0 verification gate (§14).
+"""Phase 0 verification gate (AGENT_BUILD_GUIDE §14).
 
 GATE: a "read project state" test passes AND runs identically twice.
 NEGATIVE CONTROL: killing the bridge mid-test is reported as a hang/crash, never

@@ -1,4 +1,4 @@
-"""Phase 7 verification gate (§14).
+"""Phase 7 verification gate (AGENT_BUILD_GUIDE §14).
 
 GATE: a first-time user authors a passing, mutation-verified knob test (functional +
 visual) quickly, following only the User Guide. Demonstrated by (a) the authoring DSL

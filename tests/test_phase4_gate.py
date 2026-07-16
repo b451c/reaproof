@@ -1,4 +1,4 @@
-"""Phase 4 verification gate (§14).
+"""Phase 4 verification gate (AGENT_BUILD_GUIDE §14).
 
 GATE: a drag-the-knob test verifies reported value AND drawn position track the
 gesture, runs identically twice, and its mutation (drag to a different endpoint)

@@ -1,4 +1,4 @@
-"""Phase 2 verification gate (§14).
+"""Phase 2 verification gate (AGENT_BUILD_GUIDE §14).
 
 GATE: a known-good plugin passes and a deliberately-broken one fails — THROUGH the
 validator layer — with artifacts. Demonstrated with CLAP Subject #2 (good) and its

@@ -15,11 +15,15 @@ from reaproof.determinism import DeterminismLock, host_descriptor
 @dataclass
 class Manifest:
     host: dict[str, Any]
-    reaper_build: str
+    reaper_build: str                      # the PINNED build (claim)
     lock: dict[str, Any]
     tool_versions: dict[str, str]
     plugin: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
+    # measured from the resolved REAPER.app's Info.plist — the ground truth the
+    # claim must match; None = unreadable (recorded as unknown, never guessed)
+    reaper_app_build: str | None = None
+    reaper_build_mismatch: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -46,6 +50,7 @@ def build_manifest(lock: DeterminismLock | None = None, *,
                    plugin: dict[str, Any] | None = None,
                    **extra) -> Manifest:
     lock = lock or DeterminismLock()
+    measured = paths.reaper_app_build()
     return Manifest(
         host=host_descriptor(),
         reaper_build=paths.REAPER_BUILD,
@@ -53,4 +58,7 @@ def build_manifest(lock: DeterminismLock | None = None, *,
         tool_versions=_tool_versions(),
         plugin=plugin or {},
         extra=extra,
+        reaper_app_build=measured,
+        reaper_build_mismatch=(measured is not None
+                               and measured != paths.REAPER_BUILD),
     )

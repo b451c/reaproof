@@ -36,47 +36,95 @@ def _cache_key(plugin_path: Path) -> str:
     return plugin_path.name.replace(" ", "_")
 
 
-def existing_keys(cache_path: Path) -> set[str]:
-    keys: set[str] = set()
+def existing_entries(cache_path: Path) -> dict[str, str]:
+    """key -> stored FILETIME hash (the value's FIRST comma-separated field).
+
+    Real REAPER entries are rich — ``key=FILETIME,size{id,display name`` — and
+    only the leading FILETIME participates in the skip decision; synthesized
+    skip-entries are the bare ``key=FILETIME`` form (verified working, D15).
+    """
+    entries: dict[str, str] = {}
     if not cache_path.exists():
-        return keys
+        return entries
     for line in cache_path.read_text(errors="replace").splitlines():
         if "=" in line and not line.startswith("["):
-            keys.add(line.split("=", 1)[0].strip())
-    return keys
+            k, _, v = line.partition("=")
+            entries[k.strip()] = v.strip().split(",", 1)[0]
+    return entries
 
 
-def complete_cache(cache_path: Path) -> int:
-    """Append skip-entries for every present-but-uncached VST/VST3 plugin.
+def existing_keys(cache_path: Path) -> set[str]:
+    return set(existing_entries(cache_path))
 
-    Returns the number of entries added. Idempotent: re-running adds only newly
-    appeared plugins. The cache file is a single ``[vstcache]`` section, so new
-    entries are simply appended.
+
+def complete_cache(cache_path: Path,
+                   scan_dirs: list[tuple[list[Path], str]] | None = None) -> int:
+    """Add/refresh skip-entries for every present VST/VST3 plugin.
+
+    Returns the number of entries added or refreshed. A skip-entry only works
+    while its hash equals the bundle's CURRENT mtime — so an entry whose plugin
+    was since updated is REFRESHED, not skipped (a stale hash would silently
+    re-trigger the very scan/hang this cache exists to prevent). Entries are
+    written inside the ``[vstcache]`` section (never blindly appended at EOF,
+    where a later section would orphan them). An unstat-able plugin is
+    reported loudly (it stays scannable and can hang REAPER); the rest are
+    still protected. ``scan_dirs`` overrides the system dirs for testing.
     """
     if not cache_path.exists():
         return 0
-    have = existing_keys(cache_path)
-    additions: list[str] = []
-    for dirs, ext in ((VST3_DIRS, "*.vst3"), (VST_DIRS, "*.vst")):
+    have = existing_entries(cache_path)
+    upserts: dict[str, str] = {}
+    for dirs, ext in scan_dirs or ((VST3_DIRS, "*.vst3"), (VST_DIRS, "*.vst")):
         for d in dirs:
             if not d.is_dir():
                 continue
             for plugin in sorted(d.glob(ext)):
                 key = _cache_key(plugin)
-                if key in have:
-                    continue
                 try:
                     ft = filetime_le_hex(plugin.stat().st_mtime)
-                except OSError:
+                except OSError as e:
+                    import warnings
+                    warnings.warn(
+                        f"cannot stat {plugin} ({e}) — no skip-entry written; "
+                        f"REAPER WILL scan this plugin (possible hang if it is "
+                        f"license-protected)", stacklevel=2)
                     continue
-                additions.append(f"{key}={ft}")
-                have.add(key)
-    if additions:
-        with cache_path.open("a", encoding="utf-8") as f:
-            if not cache_path.read_text(errors="replace").endswith("\n"):
-                f.write("\n")
-            f.write("\n".join(additions) + "\n")
-    return len(additions)
+                if have.get(key) != ft:
+                    upserts[key] = ft
+    if not upserts:
+        return 0
+    _write_entries(cache_path, upserts)
+    return len(upserts)
+
+
+def _write_entries(cache_path: Path, upserts: dict[str, str]) -> None:
+    """Update/insert ``key=hash`` lines inside the [vstcache] section."""
+    lines = cache_path.read_text(errors="replace").splitlines()
+    out: list[str] = []
+    pending = dict(upserts)
+    in_cache_sec = False
+    section_seen = False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            if in_cache_sec and pending:      # leaving [vstcache]: flush inserts
+                out.extend(f"{k}={v}" for k, v in sorted(pending.items()))
+                pending.clear()
+            in_cache_sec = (s == "[vstcache]")
+            section_seen = section_seen or in_cache_sec
+            out.append(line)
+            continue
+        if "=" in line and not s.startswith("["):
+            k = line.split("=", 1)[0].strip()
+            if k in pending:                  # refresh a stale entry in place
+                out.append(f"{k}={pending.pop(k)}")
+                continue
+        out.append(line)
+    if pending:                               # file ended inside a section
+        if not section_seen and not in_cache_sec:
+            out.append("[vstcache]")
+        out.extend(f"{k}={v}" for k, v in sorted(pending.items()))
+    cache_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
 def complete_all_caches(warm_cache_dir: Path) -> dict[str, int]:

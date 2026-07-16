@@ -26,7 +26,8 @@ from reaproof.provision.base import get_provisioner
 from reaproof.runner.session import ReaperSession
 
 #: format -> controlled-scan subdir, for compiled subjects installed before launch
-_PLUGIN_SUBDIR = {".clap": "CLAP", ".vst3": "VST3", ".vst": "VST", ".dylib": "VST"}
+_PLUGIN_SUBDIR = {".clap": "CLAP", ".vst3": "VST3", ".vst": "VST",
+                  ".dylib": "VST", ".lv2": "LV2"}
 
 
 @dataclass

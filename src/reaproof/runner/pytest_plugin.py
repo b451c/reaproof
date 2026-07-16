@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from _pytest.outcomes import Skipped
 from _pytest.runner import runtestprotocol
 
 from reaproof import mutation
@@ -24,9 +25,10 @@ from reaproof.report.results import ResultSet, TestResult, to_html, to_json, to_
 def pytest_addoption(parser):
     g = parser.getgroup("reaproof", "ReaProof trustworthiness enforcement")
     g.addoption("--reaproof-repeat", type=int, default=1,
-                help="re-run gate/determinism tests N times; quarantine on disagreement (§1.4)")
+                help="re-run EVERY test N times; quarantine on disagreement (§1.4)")
     g.addoption("--mutation-check", action="store_true", default=False,
-                help="report per-test mutation-verification status (§1.3)")
+                help="enforce per-test mutation-verification: a value_bearing test "
+                     "that never proved an assertion non-vacuous FAILS the run (§1.3)")
     g.addoption("--reaproof-report", default=None, metavar="DIR",
                 help="write JUnit/JSON/HTML + provenance report to DIR")
 
@@ -38,13 +40,12 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "value_bearing: an assertion that must be mutation-verified")
 
 
-def _repeatable(item) -> bool:
-    return bool(item.get_closest_marker("gate") or item.get_closest_marker("determinism"))
-
-
 def pytest_runtest_protocol(item, nextitem):
+    # --reaproof-repeat=N is an explicit opt-in: EVERY selected test is
+    # repeated (§1.4 "every test >= 2x"), not just gate/determinism-marked
+    # ones — a plain authored test deserves the same flake defence.
     n = item.config.getoption("reaproof_repeat")
-    if n <= 1 or not _repeatable(item):
+    if n <= 1:
         return None  # default protocol
     outcomes, last = [], None
     for i in range(n):
@@ -69,20 +70,54 @@ def pytest_runtest_protocol(item, nextitem):
     return True
 
 
-def pytest_runtest_makereport(item, call):
-    if call.when != "call":
-        return
-    cfg = item.config
-    quarantined = item.nodeid in cfg._reaproof_quarantined
-    status = ("quarantined" if quarantined
-              else "passed" if call.excinfo is None else "failed")
-    cfg._reaproof_results[item.nodeid] = {
+def _record(item, status: str, duration: float, message: str) -> None:
+    item.config._reaproof_results[item.nodeid] = {
         "status": status,
-        "duration": getattr(call, "duration", 0.0),
-        "message": "" if call.excinfo is None else str(call.excinfo.value)[:300],
+        "duration": duration,
+        "message": message[:300],
         "mutation_verified": item.nodeid in mutation.MUTATION_VERIFIED,
         "value_bearing": item.get_closest_marker("value_bearing") is not None,
     }
+
+
+def pytest_runtest_makereport(item, call):
+    cfg = item.config
+    duration = getattr(call, "duration", 0.0)
+    if call.when == "setup":
+        # A decorator/skipif skip (or a fixture ERROR) never reaches the call
+        # phase — without recording it here the test would be INVISIBLE in the
+        # report: an omitted error would leave gate_green true (a false green),
+        # and honest skips (§ doctrine) would be hidden instead of surfaced.
+        if call.excinfo is not None:
+            if call.excinfo.errisinstance(Skipped):
+                _record(item, "skipped", duration, str(call.excinfo.value))
+            else:
+                _record(item, "failed", duration,
+                        "setup error: " + str(call.excinfo.value))
+        return
+    if call.when == "teardown":
+        # A teardown error after a green call is still a defect — a record that
+        # says "passed" while pytest reports ERROR would be a false green.
+        if call.excinfo is not None:
+            prior = cfg._reaproof_results.get(item.nodeid)
+            if prior is not None and prior["status"] == "passed":
+                prior["status"] = "failed"
+                prior["message"] = ("teardown error: "
+                                    + str(call.excinfo.value))[:300]
+        return
+    if call.when != "call":
+        return
+    if item.nodeid in cfg._reaproof_quarantined:
+        status, message = "quarantined", str(call.excinfo.value) if call.excinfo else ""
+    elif call.excinfo is None:
+        status, message = "passed", ""
+    elif call.excinfo.errisinstance(Skipped):
+        # an in-body pytest.skip() is an HONEST SKIP, not a failure — reporting
+        # it as failed would flip the gate red on a truthful constraint
+        status, message = "skipped", str(call.excinfo.value)
+    else:
+        status, message = "failed", str(call.excinfo.value)
+    _record(item, status, duration, message)
 
 
 def _result_set(config) -> ResultSet:
@@ -99,6 +134,13 @@ def _result_set(config) -> ResultSet:
 
 def pytest_sessionfinish(session, exitstatus):
     config = session.config
+    # --mutation-check ENFORCES §1.3: a vacuous-risk test must fail the run,
+    # not just print a red line nobody's CI reads.
+    if config.getoption("mutation_check"):
+        vacuous = [n for n, r in config._reaproof_results.items()
+                   if r["value_bearing"] and not r["mutation_verified"]]
+        if vacuous and session.exitstatus == 0:
+            session.exitstatus = 1
     out = config.getoption("reaproof_report")
     if not out:
         return

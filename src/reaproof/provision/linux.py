@@ -17,7 +17,6 @@ import subprocess
 import time
 
 from reaproof import paths
-from reaproof.determinism import subprocess_env
 from reaproof.provision.base import IsolatedProfile, LaunchHandle, Provisioner
 
 # Linux REAPER + the js extension live under .cache (fetched by setup/CI).
@@ -44,15 +43,19 @@ class LinuxProvisioner(Provisioner):
             raise FileNotFoundError(
                 f"pinned Linux REAPER not provisioned: {REAPER_BIN_LINUX} "
                 "(run `reaproof setup` / the CI provisioning step)")
-        for f in (profile.run_dir / "ready.json", profile.run_dir / "heartbeat.json"):
-            if f.exists():
-                f.unlink()
+        # purge liveness markers AND the IPC queue so a relaunch of this profile
+        # can't answer new commands with a previous run's cached responses
+        self._reset_run_dir(profile)
         # direct exec under the (Xvfb) display — no `open`; force software GL for
         # cross-machine pixel determinism is set in the environment by the CI job.
+        # _launch_env carries CLAP_PATH: without it a CLAP subject installed in
+        # plugin_dir/CLAP is invisible to REAPER (vstpath does not cover CLAP).
         proc = subprocess.Popen(
             [str(REAPER_BIN_LINUX), "-newinst", "-nosplash", "-cfgfile", str(profile.ini_path)],
-            env=subprocess_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return LaunchHandle(pid=proc.pid, profile=profile, extra={"proc": proc})
+            env=self._launch_env(profile),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return LaunchHandle(pid=proc.pid, profile=profile,
+                            extra={"proc": proc, "ini": str(profile.ini_path)})
 
     def is_alive(self, handle: LaunchHandle) -> bool:
         try:
@@ -64,12 +67,18 @@ class LinuxProvisioner(Provisioner):
     def terminate(self, handle: LaunchHandle) -> None:
         for sig in (signal.SIGTERM, signal.SIGKILL):
             if not self.is_alive(handle):
-                return
+                break
             try:
                 os.kill(handle.pid, sig)
             except ProcessLookupError:
-                return
+                break
             for _ in range(30):
                 if not self.is_alive(handle):
-                    return
+                    break
                 time.sleep(0.1)
+        # belt-and-braces (mirrors macOS): reap any straggler bound to our unique
+        # cfgfile path (scan children etc.) so it cannot wedge later runs
+        ini = handle.extra.get("ini", "")
+        if ini:
+            subprocess.run(["pkill", "-9", "-f", f"cfgfile {ini}"],
+                           capture_output=True)

@@ -64,6 +64,7 @@ class Provisioner(ABC):
         *,
         plugins: list[Path] | None = None,
         jsfx: list[Path] | None = None,
+        extensions: list[Path] | None = None,
     ) -> IsolatedProfile:
         root = paths.ensure_runs_dir() / run_id
         resource_dir = root / "resource"
@@ -81,6 +82,7 @@ class Provisioner(ABC):
             plugin_dir / "VST",
             plugin_dir / "VST3",
             plugin_dir / "CLAP",
+            plugin_dir / "LV2",
             artifacts_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
@@ -104,6 +106,8 @@ class Provisioner(ABC):
             self.install_plugins(profile, plugins)
         if jsfx:
             self.install_jsfx(profile, jsfx)
+        if extensions:
+            self.install_extensions(profile, extensions)
         return profile
 
     def install_jsfx(self, profile: IsolatedProfile, files: list[Path]) -> None:
@@ -112,6 +116,33 @@ class Provisioner(ABC):
         dest.mkdir(parents=True, exist_ok=True)
         for f in files:
             shutil.copy2(f, dest / Path(f).name)
+
+    def install_extensions(self, profile: IsolatedProfile, files: list[Path]) -> None:
+        """Install native REAPER extensions-under-test into UserPlugins.
+
+        Unlike ``plugins=`` (which goes to the controlled *scan dir* for
+        VST/CLAP subjects), a native extension must live in
+        ``resource_dir/UserPlugins`` to be loaded at startup. Each installed
+        copy also gets its Gatekeeper quarantine cleared (macOS) — a
+        locally-built unsigned dylib is otherwise refused with no visible
+        error, i.e. a silent failure.
+        """
+        dest = profile.resource_dir / "UserPlugins"
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in files:
+            f = Path(f)
+            if not f.exists():
+                raise FileNotFoundError(f"extension not found: {f}")
+            target = dest / f.name
+            if f.is_dir():
+                shutil.copytree(f, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(f, target)
+            self._clear_quarantine(target)
+
+    def _clear_quarantine(self, path: Path) -> None:
+        """Platform hook: remove OS quarantine marks from an installed artifact."""
+        # default: nothing to do (Gatekeeper is macOS-only)
 
     # ---- assembly steps (overridable) -------------------------------------
     def _write_ini(self, profile: IsolatedProfile, lock: DeterminismLock) -> None:
@@ -134,6 +165,11 @@ class Provisioner(ABC):
             "[reaper]",
             f"{self.vst_path_key}={vst}",
             "vstpath=" + vst,                 # generic fallback key
+            # LV2 scan path (REAPER supports LV2 natively since 6.24; the
+            # macOS key is lv2path_mac — read out of the pinned binary).
+            # The generic key rides along for the Linux/Windows backends.
+            f"lv2path_mac={profile.plugin_dir/'LV2'}",
+            f"lv2path={profile.plugin_dir/'LV2'}",
             "defsplash=0",                    # no splash window
             "splashupdcheck=0",               # no startup update check (no phone-home)
             "autosavemode=0",                 # no autosave churn
@@ -142,6 +178,16 @@ class Provisioner(ABC):
             *self._audio_ini_lines(lock),     # SR/block pinned; suppress the no-audio modal
             "[nag]",
             "nag=65535",                      # never the unlicensed nag (license copied in)
+            "[verchk]",
+            # Far-future last-version-check stamp. `splashupdcheck=0` above only
+            # governs the splash; REAPER still runs the standalone startup version
+            # check (gated by [verchk] lastt), which on an outdated pinned build
+            # phones home and pops an APP-MODAL "New Version Notification". That
+            # modal sets [NSApp modalWindow] and silently pollutes any test that
+            # cares about modality/foreground (it broke capture-mode arming in the
+            # MaxPane assessment). A stamp in the future makes REAPER believe it
+            # just checked, so it stays offline and silent.
+            "lastt=2000000000",
         ]
         profile.ini_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -197,20 +243,64 @@ class Provisioner(ABC):
         shutil.copy2(paths.BRIDGE_LUA, profile.resource_dir / "Scripts" / "__startup.lua")
 
     def install_plugins(self, profile: IsolatedProfile, plugins: list[Path]) -> None:
-        """Copy plugin artifacts-under-test into the controlled scan dir by format."""
+        """Copy plugin artifacts-under-test into the controlled scan dir by format.
+
+        Unknown formats raise — silently guessing a directory would leave the
+        subject unscannable and surface later as a baffling "plugin not found".
+        """
+        by_suffix = {
+            ".vst3": profile.plugin_dir / "VST3",
+            ".clap": profile.plugin_dir / "CLAP",
+            ".vst": profile.plugin_dir / "VST",
+            ".dylib": profile.plugin_dir / "VST",
+            ".lv2": profile.plugin_dir / "LV2",   # bundle dir (manifest.ttl inside)
+        }
         for p in plugins:
             p = Path(p)
-            suffix = p.suffix.lower()
-            dest = {
-                ".vst3": profile.plugin_dir / "VST3",
-                ".clap": profile.plugin_dir / "CLAP",
-                ".vst": profile.plugin_dir / "VST",
-                ".dylib": profile.plugin_dir / "VST",
-            }.get(suffix, profile.plugin_dir / "VST")
+            dest = by_suffix.get(p.suffix.lower())
+            if dest is None:
+                raise ValueError(
+                    f"unsupported plugin format {p.suffix!r} for {p.name} "
+                    f"(expected {sorted(by_suffix)}; AU .component is not "
+                    f"REAPER-scannable from a custom dir — use auval/pluginval)")
             if p.is_dir():
                 shutil.copytree(p, dest / p.name, dirs_exist_ok=True)
             else:
                 shutil.copy2(p, dest / p.name)
+
+    # ---- relaunch hygiene --------------------------------------------------
+    def _reset_run_dir(self, profile: IsolatedProfile) -> None:
+        """Purge all IPC state before a launch so a RELAUNCH of the same profile
+        cannot satisfy new commands with a previous run's cached artifacts.
+
+        A fresh ``BridgeClient`` restarts its sequence counter at 1, so a stale
+        ``cmd/out/00000001.json`` from a prior launch would be read as the answer
+        to the new client's first ``eval`` — a false result. Every ``launch()``
+        calls this; it also clears the liveness markers so ``wait_ready`` can't
+        latch onto a previous run's ``ready.json``.
+        """
+        rd = profile.run_dir
+        for marker in ("ready.json", "heartbeat.json"):
+            (rd / marker).unlink(missing_ok=True)
+        for sub in ("cmd/in", "cmd/out"):
+            d = rd / sub
+            if d.is_dir():
+                for f in d.iterdir():
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+
+    def _launch_env(self, profile: IsolatedProfile) -> dict[str, str]:
+        """Environment for the REAPER process (all platforms).
+
+        CLAP_PATH is the ONLY mechanism exposing a controlled CLAP dir to
+        REAPER (it does not scan ``vstpath`` for CLAP), so every launcher must
+        use this — macOS ``open`` forwards the environment (verified live),
+        and Linux/Windows exec directly.
+        """
+        from reaproof.determinism import subprocess_env
+        return subprocess_env({"CLAP_PATH": str(profile.plugin_dir / "CLAP")})
 
     # ---- platform hooks ----------------------------------------------------
     @abstractmethod

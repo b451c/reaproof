@@ -29,3 +29,13 @@ report_html/
 
 # Track reference images on purpose (goldens are versioned)
 !goldens/**
+
+# Private workflow files (never published; belt-and-braces for future syncs)
+STATE.md
+PROGRESS.md
+DECISIONS.md
+AUDIT.md
+CLAUDE.md
+FINAL_REPORT.md
+assessments/
+.claude/settings*.json

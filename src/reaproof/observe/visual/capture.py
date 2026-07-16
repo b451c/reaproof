@@ -26,13 +26,18 @@ from PIL import Image
 @dataclass
 class Capture:
     image: np.ndarray            # (H, W, 3) uint8 RGB
-    width: int
+    width: int                   # PIXELS (2x the point bounds on Retina)
     height: int
     window_id: int | None
     window_title: str | None
     path: Path | None = None
+    # window bounds in Quartz POINTS (x, y, w, h) — divide image size by
+    # bounds w/h to get the Retina scale before computing pixel crop boxes
+    bounds: tuple[float, float, float, float] | None = None
 
     def crop(self, box: tuple[int, int, int, int]) -> np.ndarray:
+        """Crop by a PIXEL box (l, t, r, b) — convert point-based coordinates
+        with the bounds/image scale first on Retina displays."""
         l, t, r, b = box
         return self.image[t:b, l:r]
 
@@ -41,31 +46,42 @@ def _load_rgb(path: Path) -> np.ndarray:
     return np.asarray(Image.open(path).convert("RGB"), dtype=np.uint8)
 
 
-def _find_window_macos(pid: int, title_substring: str):
+def _find_window_macos(pid: int, title_substring: str, *,
+                       allow_foreign_owner: bool = False):
     import Quartz
 
     wins = Quartz.CGWindowListCopyWindowInfo(
         Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
         Quartz.kCGNullWindowID,
     )
-    # prefer an exact owner-PID match, then any window with the title
-    for want_pid in (True, False):
+    # STRICT owner-PID match by default: a title-substring match against ANY
+    # process would happily capture an unrelated app's window (a real false
+    # measurement). allow_foreign_owner=True is the explicit opt-in for
+    # windows legitimately owned by another process (e.g. AU remote-view
+    # plugin windows hosted by AUHostingService).
+    owner_passes = (True, False) if allow_foreign_owner else (True,)
+    for want_pid in owner_passes:
         for w in wins:
             name = w.get("kCGWindowName") or ""
             if title_substring in name and (not want_pid or w.get("kCGWindowOwnerPID") == pid):
-                return w.get("kCGWindowNumber"), name
-    return None, None
+                b = w.get("kCGWindowBounds") or {}
+                bounds = (b.get("X", 0.0), b.get("Y", 0.0),
+                          b.get("Width", 0.0), b.get("Height", 0.0))
+                return w.get("kCGWindowNumber"), name, bounds
+    return None, None, None
 
 
 def capture_window_macos(pid: int, title_substring: str, out_path: Path,
-                         *, settle: float = 0.4, retries: int = 20) -> Capture:
+                         *, settle: float = 0.4, retries: int = 20,
+                         allow_foreign_owner: bool = False) -> Capture:
     """Capture a specific on-screen window owned by ``pid`` whose title contains
     ``title_substring``, via its CGWindowID."""
     out_path = Path(out_path)
-    wid = name = None
+    wid = name = bounds = None
     deadline = time.monotonic() + retries * 0.25
     while time.monotonic() < deadline:
-        wid, name = _find_window_macos(pid, title_substring)
+        wid, name, bounds = _find_window_macos(
+            pid, title_substring, allow_foreign_owner=allow_foreign_owner)
         if wid:
             break
         time.sleep(0.25)
@@ -85,20 +101,32 @@ def capture_window_macos(pid: int, title_substring: str, out_path: Path,
             "for the host app (System Settings > Privacy & Security > Screen Recording)"
         )
     return Capture(image=img, width=img.shape[1], height=img.shape[0],
-                   window_id=wid, window_title=name, path=out_path)
+                   window_id=wid, window_title=name, path=out_path, bounds=bounds)
 
 
 def capture_stable(session, title_substring: str, out_path: Path, *,
-                   max_tries: int = 12, **kw) -> Capture:
+                   max_tries: int = 12, require_settled: bool = True,
+                   **kw) -> Capture:
     """Capture until two consecutive frames are identical — a wait_until(redraw
-    settled) so we never assert on a half-painted frame, without a magic sleep."""
+    settled) so we never assert on a half-painted frame, without a magic sleep.
+
+    If the window NEVER settles (animation, meter, spinner), this raises —
+    silently returning a mid-animation frame as if it were stable is a false
+    measurement. Pass ``require_settled=False`` only when asserting on content
+    known to be animation-independent, and treat the frame accordingly.
+    """
     prev = capture_fx_window(session, title_substring, out_path, **kw)
     for _ in range(max_tries):
         cur = capture_fx_window(session, title_substring, out_path, **kw)
         if cur.image.shape == prev.image.shape and np.array_equal(cur.image, prev.image):
             return cur
         prev = cur
-    return prev  # return the latest even if it never fully settled
+    if require_settled:
+        raise RuntimeError(
+            f"window '{title_substring}' never settled in {max_tries} captures "
+            "(animated content?) — pass require_settled=False to accept an "
+            "unsettled frame knowingly")
+    return prev
 
 
 def capture_via_js(session, title_substring: str, out_path: Path, *, settle: float = 0.3) -> Capture:

@@ -55,13 +55,22 @@ local function is_array(t)
   for i = 1, n do if t[i] == nil then return false end end
   return true, n
 end
-function json.encode(v)
+local MAX_DEPTH = 64  -- cyclic/very deep tables must error loudly, not stack-overflow
+function json.encode(v, depth)
+  depth = (depth or 0) + 1
+  if depth > MAX_DEPTH then
+    error("json: table exceeds max depth " .. MAX_DEPTH .. " (cycle? return a flat value)")
+  end
   local tv = type(v)
   if v == nil then return "null"
   elseif tv == "boolean" then return v and "true" or "false"
   elseif tv == "number" then
-    if v ~= v then return "null" end          -- NaN  (non-finite -> null; analysers detect pathology in audio path)
-    if v == math.huge or v == -math.huge then return "null" end
+    -- Non-finite numbers travel as a tagged sentinel the client decodes back
+    -- to float('nan')/inf — encoding them as null made a NaN measurement
+    -- indistinguishable from a legitimate Lua nil (a §1.7 pathology hidden).
+    if v ~= v then return '{"__reaproof_nonfinite__":"nan"}' end
+    if v == math.huge then return '{"__reaproof_nonfinite__":"inf"}' end
+    if v == -math.huge then return '{"__reaproof_nonfinite__":"-inf"}' end
     if math.type and math.type(v) == "integer" then return string.format("%d", v) end
     if v == math.floor(v) and math.abs(v) < 1e15 then return string.format("%d", v) end
     return string.format("%.17g", v)
@@ -70,13 +79,13 @@ function json.encode(v)
     local arr, n = is_array(v)
     if arr then
       local parts = {}
-      for i = 1, n do parts[i] = json.encode(v[i]) end
+      for i = 1, n do parts[i] = json.encode(v[i], depth) end
       return "[" .. table.concat(parts, ",") .. "]"
     else
       local parts = {}
       for k, val in pairs(v) do
         if type(k) == "string" or type(k) == "number" then
-          parts[#parts + 1] = '"' .. esc(tostring(k)) .. '":' .. json.encode(val)
+          parts[#parts + 1] = '"' .. esc(tostring(k)) .. '":' .. json.encode(val, depth)
         end
       end
       return "{" .. table.concat(parts, ",") .. "}"
@@ -91,7 +100,11 @@ local function atomic_write(path, data)
   local tmp = path .. ".tmp"
   local f = io.open(tmp, "wb")
   if not f then return false end
-  f:write(data); f:close()
+  -- check the write actually succeeded (disk full etc.) — publishing a
+  -- truncated file via rename would hand the client corrupt JSON
+  local wok = f:write(data)
+  local cok = f:close()
+  if not wok or cok == false then os.remove(tmp); return false end
   return os.rename(tmp, path)
 end
 
@@ -111,7 +124,14 @@ local function service_one(seq)
     if ok then resp = { id = tonumber(seq) or seq, ok = true, result = res }
     else resp = { id = tonumber(seq) or seq, ok = false, error = tostring(res) } end
   end
-  atomic_write(outpath, json.encode(resp))
+  -- an unserialisable RESULT (cycle/too deep) must come back as an error
+  -- response, not vanish into a client timeout
+  local okj, encoded = pcall(json.encode, resp)
+  if not okj then
+    encoded = json.encode({ id = tonumber(seq) or seq, ok = false,
+                            error = "encode: " .. tostring(encoded) })
+  end
+  atomic_write(outpath, encoded)
 end
 
 -- discover request seqs lacking a response, ascending

@@ -1,4 +1,4 @@
-"""Determinism lock (§5.1, §1.4) and provenance helpers.
+"""Determinism lock (AGENT_BUILD_GUIDE §5.1, §1.4) and provenance helpers.
 
 This module owns the inputs that must be frozen for "same test, same inputs =>
 same result" to hold, and the env every subprocess we control inherits. The
@@ -16,9 +16,11 @@ from typing import Any
 
 # Locale/timezone are frozen: the host uses a comma decimal separator (observed
 # `df` -> "1,9Ti"), exactly the §5.1 hazard for value<->text round-trips. Every
-# subprocess we directly control (validators, analysis) inherits these. (REAPER
-# itself is launched via macOS `open`, which does not propagate env — its own
-# number formatting is verified empirically in Phase 1; see DECISIONS D13.)
+# subprocess we directly control (validators, analysis) inherits these — and so
+# does REAPER itself: macOS `open` DOES forward the caller's environment to the
+# launched app (verified live in Quality Audit v2: os.getenv("CLAP_PATH") and
+# os.getenv("LC_NUMERIC") read back the locked values inside REAPER). REAPER's
+# number formatting is additionally verified empirically in Phase 1 (D13).
 LOCKED_ENV: dict[str, str] = {
     "LC_ALL": "en_US.UTF-8",
     "LC_NUMERIC": "C",
@@ -90,9 +92,22 @@ def assert_identical(values: list[Any], *, what: str = "result") -> None:
     """
     if len(values) < 2:
         raise ValueError("determinism check needs >= 2 runs")
-    first = json.dumps(values[0], sort_keys=True, default=str)
+
+    def _dump(v: Any) -> str:
+        # STRICT serialization: coercing unknown types through str() (the old
+        # default=str) let objects with equal str() but different state count
+        # as "identical" — the gate must refuse what it cannot compare.
+        try:
+            return json.dumps(v, sort_keys=True)
+        except TypeError as e:
+            raise ValueError(
+                f"assert_identical got a non-JSON-serializable value ({e}); "
+                "normalize the result (lists/dicts/scalars) before comparing"
+            ) from e
+
+    first = _dump(values[0])
     for i, v in enumerate(values[1:], start=2):
-        cur = json.dumps(v, sort_keys=True, default=str)
+        cur = _dump(v)
         if cur != first:
             raise NonDeterminismError(
                 f"{what} differs between run 1 and run {i} (FLAKY -> quarantine, "

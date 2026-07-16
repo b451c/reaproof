@@ -1,4 +1,4 @@
-"""Phase 6 verification gate (§14).
+"""Phase 6 verification gate (AGENT_BUILD_GUIDE §14).
 
 GATE: the matrix runs in CI (the .github workflow; PENDING CI for the OS legs),
 uploads artifacts, REPORTS COVERAGE GAPS, and QUARANTINES (does not hide) an injected
@@ -62,7 +62,9 @@ def test_report_emits_and_quarantine_is_visible_not_green():
     ])
     assert not rs.gate_green                       # quarantine is never counted green
     j = to_junit(rs)
-    assert "QUARANTINED" in j and "skipped" in j   # visible in JUnit, not a silent pass
+    # a flaky test is a DEFECT: JUnit must count it as a FAILURE so a CI gating
+    # on failures-count agrees with gate_green (skipped would read as green)
+    assert "QUARANTINED" in j and 'failures="1"' in j
     data = to_json(rs)
     assert '"quarantined": 1' in data and '"gate_green": false' in data
     html = to_html(rs)

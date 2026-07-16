@@ -62,7 +62,9 @@ def run_pluginval(
     if skip_gui:
         cmd.insert(1, "--skip-gui-tests")
     if seed is not None:
-        cmd[1:1] = ["--randomise", "--seed", hex(seed)]
+        # the flag is --random-seed (verified against the pinned 1.0.4 binary's
+        # --help); the old --seed was silently ignored — the seed never applied
+        cmd[1:1] = ["--randomise", "--random-seed", hex(seed)]
     if sample_rates:
         cmd[1:1] = ["--sample-rates", ",".join(map(str, sample_rates))]
     if block_sizes:

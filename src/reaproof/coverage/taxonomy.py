@@ -50,7 +50,8 @@ class ControlCoverage:
     @property
     def fraction(self) -> float:
         total = len(self.covered) + len(self.uncovered)
-        return len(self.covered) / total if total else 1.0
+        # no applicable cells => nothing was proven; never report it as 100%
+        return len(self.covered) / total if total else 0.0
 
 
 @dataclass
@@ -61,7 +62,12 @@ class CoverageReport:
     def fraction(self) -> float:
         cov = sum(len(c.covered) for c in self.controls)
         tot = sum(len(c.covered) + len(c.uncovered) for c in self.controls)
-        return cov / tot if tot else 1.0
+        # an EMPTY report (no controls declared) covered nothing — reporting
+        # 1.0 would hand a completely untested plugin "100% coverage".
+        # NOTE the input-shaped limit: controls never declared in `exercised`
+        # do not appear in the denominator at all; derive the control list
+        # from the plugin (coverage/derive.py) to make absences visible.
+        return cov / tot if tot else 0.0
 
     def gaps(self) -> dict[str, list[str]]:
         return {c.control: c.uncovered for c in self.controls if c.uncovered}

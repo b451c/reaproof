@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reaproof"
-version = "0.1.0"
+version = "0.3.0"
 description = "Trustworthy, automated testing for REAPER plugins and extensions - point it at a plugin and get a real pass/fail."
 readme = "README.md"
 requires-python = ">=3.11"

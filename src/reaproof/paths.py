@@ -41,6 +41,25 @@ REAPER_BIN = REAPER_APP / "Contents" / "MacOS" / "REAPER"
 REAPER_VERSION = os.environ.get("REAPROOF_REAPER_VERSION", "7.75")
 REAPER_BUILD = os.environ.get("REAPROOF_REAPER_BUILD", "7.75.0_e2e941bu")
 
+
+def reaper_app_build(app: Path | None = None) -> str | None:
+    """The build string the resolved REAPER.app ACTUALLY carries (Info.plist
+    CFBundleVersion, e.g. "7.75.0_e2e941bu"), or None if unreadable.
+
+    ``REAPER_BUILD`` above is only a *claim* (an env default); when
+    ``REAPROOF_REAPER_APP`` points at some other install, provenance/doctor
+    compare the claim against this measured value so results are never
+    silently attributed to the wrong REAPER.
+    """
+    import plistlib
+    a = Path(app) if app else REAPER_APP
+    try:
+        with open(a / "Contents" / "Info.plist", "rb") as f:
+            v = plistlib.load(f).get("CFBundleVersion")
+        return str(v) if v else None
+    except Exception:  # noqa: BLE001 — absent/foreign layout: unknown, not fatal
+        return None
+
 # In-REAPER bridge source (deployed into each isolated profile as Scripts/__startup.lua)
 BRIDGE_LUA = REPO_ROOT / "bridge" / "reaproof_bridge.lua"
 
@@ -58,6 +77,13 @@ SUBJECTS = CACHE / "subjects"
 CLAP_SDK_INCLUDE = CACHE / "clap-sdk" / "include"
 CLAP_GOOD = SUBJECTS / "clap" / "reaproof_gain.clap"
 CLAP_BROKEN = SUBJECTS / "clap" / "reaproof_gain_broken.clap"
+LV2_GOOD = SUBJECTS / "lv2" / "reaproof_gain.lv2"
+LV2_BROKEN = SUBJECTS / "lv2" / "reaproof_gain_broken.lv2"
+# Reference native extensions (examples/ext) — the extensions= install subject
+# and the deliberately-faulty variant for the U1 fault-forensics gate
+EXT_TEST = SUBJECTS / "ext" / "reaper_reaproof_testext.dylib"
+EXT_FAULT = SUBJECTS / "ext" / "reaper_reaproof_crashext.dylib"
+EXT_NOOP = SUBJECTS / "ext" / "reaper_reaproof_noopext.dylib"
 
 # Validators (macOS host paths; other OSes resolved per-platform in provision/)
 PLUGINVAL = TOOLS / "pluginval" / "pluginval.app" / "Contents" / "MacOS" / "pluginval"

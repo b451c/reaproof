@@ -336,6 +336,13 @@ def _mut_determinism(a, b, name, add):
                            [("scale 1%", lambda p: (p[0], np.asarray(p[1]) * 0.99))])
     if not rep.clean_passed:
         add(name, "failed", message="renders differ", mutation_verified=True)
+    elif rep.vacuous:
+        # the 1% scale did not register — a near-silent output nulls against
+        # anything, so "bit-identical" was proven by NOTHING. Stamping it
+        # mutation_verified would be the exact lie §1.3 exists to prevent.
+        add(name, "failed", mutation_verified=False,
+            message="determinism assertion VACUOUS — output too quiet for the "
+                    "mutation to register (silent render?)")
     else:
         add(name, "passed", mutation_verified=True)
 
@@ -364,10 +371,14 @@ def _validator(plugin: Path, fmt: str, add, art_dir):
             add("validator: pluginval conformance", "passed" if r.passed else "failed",
                 message=r.summary())
         else:
-            add(f"validator ({fmt})", "quarantined",
-                message=f"no validator provisioned for {fmt} (skipped, not a failure)")
+            # honest SKIP: the tool simply isn't provisioned. "quarantined"
+            # would (rightly) red the gate — punishing a perfect plugin for a
+            # missing tool. The skip stays visible in every report.
+            add(f"validator ({fmt})", "skipped",
+                message=f"no validator provisioned for {fmt} (install it to cover conformance)")
     except Exception as e:
-        add(f"validator ({fmt})", "quarantined", message=f"validator error: {str(e)[:160]}")
+        # the tool exists but broke — that is a failure to verify, not a skip
+        add(f"validator ({fmt})", "failed", message=f"validator error: {str(e)[:160]}")
 
 
 def _emit(rs: ResultSet, out_dir: Path | None, plugin: Path):

@@ -7,8 +7,22 @@ path here. Every gesture is recorded for provenance (§1.8). Window-relative
 fractions are converted to screen coordinates via the window's Quartz bounds, so
 gestures are layout/position independent.
 
-Primitives: move, click, double_click, drag, wheel, hover. (Keyboard + right-click
-menus build on the same CGEvent path; added as controls need them.)
+KNOWN BOUNDARY (macOS): a CGEvent click aimed at a SWELL *dialog* window that is
+not the key window is swallowed by Cocoa as an activation click — it never
+reaches the view. Extension UIs are SWELL dialogs, so OS-level clicks are NOT a
+reliable way to drive them. Use the in-process paths instead:
+  - ``bridge_click`` / ``bridge_drag`` — raw WM_*BUTTON* messages in client
+    coords; drives custom-drawn DlgProc chrome (e.g. an extension's own nav
+    buttons) without needing focus;
+  - ``dialog_command`` — WM_COMMAND to the dialog; the reliable way to press a
+    *standard* SWELL Button/menu item (posted BM_CLICK and raw WM_LBUTTON* do
+    NOT fire BN_CLICKED on SWELL — verified on the pinned build).
+OS-level CGEvent input (``_MacMouse``/``type_text``) is still required when the
+observable reads the *real* OS input state (JSFX @gfx mouse_cap, capture polls
+using GetCursorPos/GetAsyncKeyState) or when typing into a focused window.
+
+Primitives: move, click (left/right), double_click, hold_click, drag, wheel,
+type_text; in-process: bridge_click, bridge_drag, dialog_command.
 """
 from __future__ import annotations
 
@@ -26,14 +40,21 @@ class GestureLog:
         self.events.append({"kind": kind, **kw})
 
 
-def window_bounds_macos(pid: int, title_substring: str):
-    """Window bounds (X, Y, W, H) in global top-left coords (CGEvent's frame)."""
+def window_bounds_macos(pid: int, title_substring: str, *,
+                        allow_foreign_owner: bool = False):
+    """Window bounds (X, Y, W, H) in global top-left coords (CGEvent's frame).
+
+    STRICT owner-PID match by default — a bare title-substring match against
+    any process would aim gestures at an unrelated app's window. Foreign
+    owners (AU remote-view windows hosted out-of-process) are an explicit
+    opt-in via ``allow_foreign_owner=True``.
+    """
     import Quartz
 
     wins = Quartz.CGWindowListCopyWindowInfo(
         Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
         Quartz.kCGNullWindowID)
-    for want_pid in (True, False):
+    for want_pid in (True, False) if allow_foreign_owner else (True,):
         for w in wins:
             name = w.get("kCGWindowName") or ""
             if title_substring in name and (not want_pid or w.get("kCGWindowOwnerPID") == pid):
@@ -49,41 +70,157 @@ class _MacMouse:
         import Quartz
         self.Q = Quartz
 
-    def _post(self, etype, x, y):
+    def _post(self, etype, x, y, button=None):
         Q = self.Q
-        e = Q.CGEventCreateMouseEvent(None, etype, (x, y), Q.kCGMouseButtonLeft)
+        e = Q.CGEventCreateMouseEvent(None, etype, (x, y),
+                                      button if button is not None
+                                      else Q.kCGMouseButtonLeft)
         Q.CGEventPost(Q.kCGHIDEventTap, e)
 
     def move(self, x, y):
         self._post(self.Q.kCGEventMouseMoved, x, y)
 
-    def down(self, x, y):
-        self._post(self.Q.kCGEventLeftMouseDown, x, y)
+    def down(self, x, y, right: bool = False):
+        Q = self.Q
+        if right:
+            self._post(Q.kCGEventRightMouseDown, x, y, Q.kCGMouseButtonRight)
+        else:
+            self._post(Q.kCGEventLeftMouseDown, x, y)
 
-    def up(self, x, y):
-        self._post(self.Q.kCGEventLeftMouseUp, x, y)
+    def up(self, x, y, right: bool = False):
+        Q = self.Q
+        if right:
+            self._post(Q.kCGEventRightMouseUp, x, y, Q.kCGMouseButtonRight)
+        else:
+            self._post(Q.kCGEventLeftMouseUp, x, y)
 
     def drag_step(self, x, y):
         self._post(self.Q.kCGEventLeftMouseDragged, x, y)
 
+    def _release(self, x, y, right: bool = False):
+        """Best-effort button release for finally-paths: a synthetic button
+        left DOWN (KeyboardInterrupt mid-gesture, a Quartz error) turns the
+        next test's first move into a system-wide drag — a cross-run leak."""
+        try:
+            self.up(x, y, right)
+        except Exception:  # noqa: BLE001 — releasing is already the recovery
+            pass
+
     def drag(self, fx, fy, tx, ty, steps=40, dwell=0.006):
         self.move(fx, fy); time.sleep(0.05)
-        self.down(fx, fy); time.sleep(0.08)
-        for i in range(1, steps + 1):
-            self.drag_step(fx + (tx - fx) * i / steps, fy + (ty - fy) * i / steps)
-            time.sleep(dwell)
-        self.up(tx, ty); time.sleep(0.15)
+        self.down(fx, fy)
+        try:
+            time.sleep(0.08)
+            for i in range(1, steps + 1):
+                self.drag_step(fx + (tx - fx) * i / steps, fy + (ty - fy) * i / steps)
+                time.sleep(dwell)
+        finally:
+            self._release(tx, ty)
+        time.sleep(0.15)
 
-    def click(self, x, y):
-        self.move(x, y); time.sleep(0.03); self.down(x, y); time.sleep(0.03); self.up(x, y)
+    def click(self, x, y, right: bool = False):
+        self.move(x, y); time.sleep(0.03)
+        self.down(x, y, right)
+        try:
+            time.sleep(0.03)
+        finally:
+            self._release(x, y, right)
 
     def double_click(self, x, y):
-        self.click(x, y); time.sleep(0.05); self.click(x, y)
+        """A REAL double-click: the second press carries CGEvent click-state 2
+        (two independent clicks read as two singles — 'double-click to reset'
+        controls never fire on those)."""
+        Q = self.Q
+        self.click(x, y)
+        time.sleep(0.05)
+        pt = (x, y)
+        for etype in (Q.kCGEventLeftMouseDown, Q.kCGEventLeftMouseUp):
+            e = Q.CGEventCreateMouseEvent(None, etype, pt, Q.kCGMouseButtonLeft)
+            Q.CGEventSetIntegerValueField(e, Q.kCGMouseEventClickState, 2)
+            Q.CGEventPost(Q.kCGHIDEventTap, e)
+            time.sleep(0.03)
+
+    def hold_click(self, x, y, hold: float = 0.35, right: bool = False):
+        """Move + press-HOLD-release. A capture poll that reads the real OS
+        mouse (GetCursorPos + GetAsyncKeyState) needs the button held across
+        poll ticks — a plain click is too fast to be observed reliably."""
+        self.move(x, y); time.sleep(0.15)
+        self.down(x, y, right)
+        try:
+            time.sleep(hold)
+        finally:
+            self._release(x, y, right)
+        time.sleep(0.2)
 
     def wheel(self, delta_lines: int):
         Q = self.Q
         e = Q.CGEventCreateScrollWheelEvent(None, Q.kCGScrollEventUnitLine, 1, int(delta_lines))
         Q.CGEventPost(Q.kCGHIDEventTap, e)
+
+
+def type_text(text: str, *, enter: bool = False):
+    """OS-level unicode typing (layout-independent) into the current key window.
+
+    macOS: CGEvent with an explicit unicode payload, so it types the literal
+    characters regardless of keyboard layout. The caller is responsible for
+    focus (bring the target frontmost / JS_Window_SetFocus first). ``enter``
+    appends a Return keypress (kVK_Return).
+    """
+    if platform.system() != "Darwin":
+        raise NotImplementedError("OS-level typing is macOS (CGEvent) for now")
+    import Quartz as Q
+    for ch in text:
+        for down in (True, False):
+            ev = Q.CGEventCreateKeyboardEvent(None, 0, down)
+            Q.CGEventKeyboardSetUnicodeString(ev, len(ch), ch)
+            Q.CGEventPost(Q.kCGHIDEventTap, ev)
+            time.sleep(0.01)
+    if enter:
+        for down in (True, False):
+            Q.CGEventPost(Q.kCGHIDEventTap,
+                          Q.CGEventCreateKeyboardEvent(None, 36, down))  # kVK_Return
+            time.sleep(0.02)
+    time.sleep(0.15)
+
+
+def bridge_click(session, title_substring: str, client_x: int, client_y: int,
+                 *, right: bool = False):
+    """In-process click: post WM_*BUTTONDOWN/UP in CLIENT coords to the window.
+
+    The first-class path for SWELL-*dialog* targets on macOS (extension UIs),
+    where a CGEvent click to a non-key window is swallowed by Cocoa as an
+    activation. Drives custom-drawn DlgProc chrome (nav bars, canvases) without
+    needing focus or screen coordinates. NOTE: a *standard* SWELL Button does
+    not fire BN_CLICKED from posted button messages — use ``dialog_command``
+    for those (verified on the pinned build).
+    """
+    btn = "RBUTTON" if right else "LBUTTON"
+    wparam = 0 if right else 1
+    ok = session.eval(f"""
+    local h = reaper.JS_Window_Find("{title_substring}", false)
+    if not h then return false end
+    reaper.JS_WindowMessage_Post(h, "WM_{btn}DOWN", {wparam}, 0, {int(client_x)}, {int(client_y)})
+    reaper.JS_WindowMessage_Post(h, "WM_{btn}UP", 0, 0, {int(client_x)}, {int(client_y)})
+    return true""")
+    if not ok:
+        raise RuntimeError(f"bridge_click: window not found (title~='{title_substring}')")
+
+
+def dialog_command(session, title_substring: str, command_id: int):
+    """Press a standard SWELL dialog control in-process via WM_COMMAND.
+
+    Posted BM_CLICK / raw WM_LBUTTON* do NOT fire a SWELL Button's BN_CLICKED
+    (verified: the Actions window's Close button ignores both) — WM_COMMAND to
+    the dialog is the reliable channel, exactly what the button would send.
+    ``command_id`` is the control ID (JS_Window_GetLong(child, "ID")).
+    """
+    ok = session.eval(f"""
+    local h = reaper.JS_Window_Find("{title_substring}", false)
+    if not h then return false end
+    reaper.JS_WindowMessage_Post(h, "WM_COMMAND", {int(command_id)}, 0, 0, 0)
+    return true""")
+    if not ok:
+        raise RuntimeError(f"dialog_command: window not found (title~='{title_substring}')")
 
 
 def bridge_drag(session, title_substring: str, from_client, to_client, *, steps: int = 40):
@@ -99,13 +236,17 @@ def bridge_drag(session, title_substring: str, from_client, to_client, *, steps:
         f'reaper.JS_WindowMessage_Send(h,"WM_MOUSEMOVE",1,0,'
         f'{int(fx + (tx-fx)*i/steps)},{int(fy + (ty-fy)*i/steps)})'
         for i in range(1, steps + 1))
-    session.eval(f"""
+    ok = session.eval(f"""
     local h = reaper.JS_Window_Find("{title_substring}", false)
     if not h then return false end
     reaper.JS_WindowMessage_Send(h,"WM_LBUTTONDOWN",1,0,{int(fx)},{int(fy)})
     {moves}
     reaper.JS_WindowMessage_Send(h,"WM_LBUTTONUP",0,0,{int(tx)},{int(ty)})
     return true""")
+    if not ok:
+        # a drag that silently no-ops on a missing window would let the test
+        # proceed as if the gesture happened (bridge_click already raises)
+        raise RuntimeError(f"bridge_drag: window not found (title~='{title_substring}')")
 
 
 def _mouse():
@@ -145,6 +286,22 @@ class WindowGesture:
         x, y = self._to_screen(*frac)
         self.mouse.click(x, y)
         self.log.add("click", frac=frac)
+
+    def right_click(self, frac):
+        x, y = self._to_screen(*frac)
+        self.mouse.click(x, y, right=True)
+        self.log.add("right_click", frac=frac)
+
+    def hold_click(self, frac, hold: float = 0.35, right: bool = False):
+        x, y = self._to_screen(*frac)
+        self.mouse.hold_click(x, y, hold=hold, right=right)
+        self.log.add("hold_click", frac=frac, hold=hold, right=right)
+
+    def type(self, text: str, *, enter: bool = False):
+        """Type into the session's key window (bring the target to front first
+        via a click/frontmost; typing goes to whatever holds keyboard focus)."""
+        type_text(text, enter=enter)
+        self.log.add("type", text=text, enter=enter)
 
     def double_click(self, frac):
         x, y = self._to_screen(*frac)

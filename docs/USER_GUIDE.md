@@ -1,20 +1,17 @@
-# ReaProof - User Guide
+# ReaProof — User Guide
 
-This guide is for developers of REAPER plugins, extensions, and scripts who want to test
-them automatically and *trustworthily* - including the visual behaviour of GUI controls -
-without clicking through REAPER by hand every time.
+> **⚠️ As-built note (2026-06-25).** This guide describes the *target* user experience.
+> The v1 build is complete and verified on **macOS**; see [`../FINAL_REPORT.md`](../FINAL_REPORT.md)
+> and [`../README.md`](../README.md) for the accurate as-built quickstart. Differences to
+> know now: the package runs **from source** (`PYTHONPATH=src python -m reaproof.runner.cli ...`),
+> not yet `pip install`; the implemented CLI is `setup · doctor · init · new-test · run · report`
+> (the `ci`, `goldens`, and `import` subcommands below are **target-only, not yet built**);
+> visual/input tests need macOS **Screen Recording** permission; **Windows/Linux are PENDING CI.**
+> The doctrine, test types, and the worked knob tutorial below are all real and implemented.
 
-There are two ways to use ReaProof:
+This guide is for developers of REAPER extensions, plugins, and scripts who want to test them automatically and *trustworthily* — including the visual behaviour of GUI controls — without clicking through REAPER by hand every time.
 
-1. **Universal, zero-code** - `reaproof test <plugin>` runs a real QA battery (load,
-   validator, pathology-free audio, determinism, parameter-range robustness) with no test
-   code at all. Start here; it is covered in [the README](../README.md).
-2. **Custom semantic specs** - when you want to assert *what* a plugin should do (exact
-   gain, a knob's drawn angle, state recall), you write a few lines with the authoring API.
-   That is what the rest of this guide covers, with a worked knob tutorial.
-
-> Platform status: verified on **macOS**; the audio/bridge planes are CI-verified on Linux;
-> Windows is not supported yet. Visual/input tests need macOS **Screen Recording** permission.
+If you are building the platform itself, start from the test suite — it demonstrates every plane.
 
 ---
 
@@ -253,6 +250,27 @@ The knob is the worked example; the same matrix generalises. Use `--type visual/
 
 For any of these, the principle is identical: assert on an independent observation, cross-check pixels against reported state (and, where relevant, against rendered audio), and mutation-verify every assertion.
 
+### 6.1 Persistence tests: `session.restart()` (assemble once, launch N times)
+
+Startup-behaviour and settings-persistence tests need run 2 to see run 1's
+disk state. **Do not start a second session** — every new session (and every
+`start()`) re-assembles the profile from scratch, wiping run 1's state. Use
+`restart()`:
+
+```python
+with ReaperSession("persist") as s:
+    s.eval('reaper.SetExtState("my_ext","key","value", true); return true')  # persist=true
+    s.restart()          # clean quit (flushes persisted state) + relaunch of the SAME profile
+    assert s.eval('return reaper.GetExtState("my_ext","key")') == "value"
+```
+
+`restart()` quits REAPER via its own File→Quit (REAPER only flushes persisted
+ExtState and ini state on a real quit — a kill loses it), then relaunches the
+same resource dir. `restart(hard=True)` skips the clean quit (SIGTERM) for
+crash-recovery tests; state persisted since the last flush is then not
+guaranteed to survive. If the clean quit cannot complete, `restart()` raises
+instead of silently killing. Gate: `tests/test_session_restart.py`.
+
 ---
 
 ## 7. Running in CI
@@ -338,4 +356,4 @@ reaproof ci init --provider github                      Generate CI workflow
 
 ### Where to go next
 - The complete control-coverage taxonomy and tool/version details: [`REFERENCE.md`](REFERENCE.md).
-- The universal, zero-code flow: [`../README.md`](../README.md) (`reaproof test <plugin>`).
+- How the platform guarantees trustworthy results: [`REFERENCE.md`](REFERENCE.md) §8 ("no false results").

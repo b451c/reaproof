@@ -1,4 +1,4 @@
-"""Phase 1 verification gate (§14).
+"""Phase 1 verification gate (AGENT_BUILD_GUIDE §14).
 
 GATE: a gain test asserts -6 dB output correctly AND its mutation (inject x0.5)
 turns it RED; a NaN-producing build is FAILED, not skipped.

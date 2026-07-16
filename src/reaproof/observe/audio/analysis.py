@@ -38,23 +38,38 @@ def true_peak_dbfs(x: np.ndarray, sr: int = 48000, oversample: int = 4) -> float
 
 
 def lufs_integrated(x: np.ndarray, sr: int = 48000) -> float:
-    """Integrated loudness (ITU-R BS.1770) via pyloudnorm."""
+    """Integrated loudness (ITU-R BS.1770) via pyloudnorm.
+
+    BS.1770 gating needs at least one 400 ms block; below that pyloudnorm
+    silently yields -inf/degenerate values. Enforced here so a too-short
+    render is a loud error, not a silently wrong loudness.
+    """
     import pyloudnorm as pyln
 
     data = np.asarray(x, dtype=np.float64)
     if data.ndim == 1:
         data = data.reshape(-1, 1)
+    if data.shape[0] < int(0.4 * sr):
+        raise ValueError(
+            f"integrated LUFS needs >= 400 ms of audio (got {data.shape[0]/sr*1000:.0f} ms)")
     meter = pyln.Meter(sr)
     return float(meter.integrated_loudness(data))
 
 
 def spectral_centroid(x: np.ndarray, sr: int = 48000) -> float:
-    """Energy-weighted mean frequency (Hz) — e.g. to verify a cutoff knob moves it."""
+    """Energy-weighted mean frequency (Hz) — e.g. to verify a cutoff knob moves it.
+
+    Silence/empty input returns NaN (unmeasurable), NOT 0.0 — a broken plugin
+    outputting silence must not masquerade as a genuine low-frequency reading.
+    Any comparison against NaN is False, so an assertion fails loudly.
+    """
     m = _mono(x)
+    if m.size == 0:
+        return float("nan")
     spec = np.abs(np.fft.rfft(m * np.hanning(len(m))))
     freqs = np.fft.rfftfreq(len(m), 1.0 / sr)
     denom = spec.sum()
-    return float((freqs * spec).sum() / denom) if denom > 0 else 0.0
+    return float((freqs * spec).sum() / denom) if denom > 0 else float("nan")
 
 
 def rms_envelope_dbfs(x: np.ndarray, sr: int = 48000, window_ms: float = 50.0) -> np.ndarray:
@@ -74,10 +89,20 @@ def null_test_dbfs(a: np.ndarray, b: np.ndarray) -> float:
 
     Bit-identical inputs give -inf (clamped to the floor). Caller asserts the
     residual is below a justified floor (e.g. <= -120 dBFS for "transparent").
+
+    STRICT on length: a null over only the overlapping prefix would let a
+    truncated render pass as "transparent" while its missing tail was never
+    examined — a false PASS. Unequal lengths raise; align/trim explicitly at
+    the call site if a length difference is expected.
     """
     ma, mb = _mono(a), _mono(b)
-    n = min(len(ma), len(mb))
-    return rms_dbfs(ma[:n] - mb[:n])
+    if len(ma) != len(mb):
+        raise ValueError(
+            f"null test requires equal lengths, got {len(ma)} vs {len(mb)} — "
+            "a truncated render must fail loudly, not null on the prefix")
+    if len(ma) == 0:
+        raise ValueError("null test on empty signals proves nothing")
+    return rms_dbfs(ma - mb)
 
 
 # ---- pathology detection (hard fail, §1.7) --------------------------------
@@ -101,6 +126,9 @@ def detect_pathologies(
     found: list[Pathology] = []
     arr = np.asarray(x, dtype=np.float64)
     if arr.size == 0:
+        # an absent/zero-length signal must never read as "pathology-free":
+        # a render that produced no audio is a hard failure, not a clean pass
+        found.append(Pathology("empty", "no samples to check (render produced nothing?)"))
         return found
     if np.isnan(arr).any():
         found.append(Pathology("nan", f"{int(np.isnan(arr).sum())} NaN samples"))

@@ -1,4 +1,4 @@
-"""Phase 3 verification gate (§14) — the hard last mile.
+"""Phase 3 verification gate (AGENT_BUILD_GUIDE §14) — the hard last mile.
 
 GATE: a knob visual test passes AND its mutation (force the indicator to the wrong
 angle / desync drawn-vs-reported) turns it RED; a corrupted frame is caught by both

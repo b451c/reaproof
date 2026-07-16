@@ -44,6 +44,16 @@ def parse_clap_json(data: dict) -> dict:
             "skipped": skipped, "failed_tests": failed_tests}
 
 
+def clap_verdict(exit_code: int, counts: dict) -> bool:
+    """PASS iff the tool exited 0, nothing failed, AND >0 tests were seen.
+
+    ``total > 0`` closes a silent-pass hole: exit 0 with ZERO recognized tests
+    (renamed JSON sections, empty enumeration) verified nothing — "0/0 passed"
+    must never be green.
+    """
+    return exit_code == 0 and counts["failed"] == 0 and counts["total"] > 0
+
+
 def run_clap_validator(
     plugin: str | Path,
     *,
@@ -75,7 +85,7 @@ def run_clap_validator(
         counts = {"total": 0, "passed": 0, "failed": 1, "skipped": 0,
                   "failed_tests": ["<no JSON output>"]}
 
-    passed = proc.returncode == 0 and counts["failed"] == 0
+    passed = clap_verdict(proc.returncode, counts)
     return ValidatorResult(
         tool="clap-validator",
         target=str(plugin),
