@@ -1,17 +1,15 @@
 # ReaProof — User Guide
 
-> **⚠️ As-built note (2026-06-25).** This guide describes the *target* user experience.
-> The v1 build is complete and verified on **macOS**; see [`../FINAL_REPORT.md`](../FINAL_REPORT.md)
-> and [`../README.md`](../README.md) for the accurate as-built quickstart. Differences to
-> know now: the package runs **from source** (`PYTHONPATH=src python -m reaproof.runner.cli ...`),
-> not yet `pip install`; the implemented CLI is `setup · doctor · init · new-test · run · report`
-> (the `ci`, `goldens`, and `import` subcommands below are **target-only, not yet built**);
-> visual/input tests need macOS **Screen Recording** permission; **Windows/Linux are PENDING CI.**
-> The doctrine, test types, and the worked knob tutorial below are all real and implemented.
+> **As-built note (2026-07-16, v0.3.0).** Accurate today: the zero-code batteries
+> (`reaproof test`, `reaproof test-repo`), the agent-authoring flow (`author`,
+> `features-report`), `doctor`, `run`, `goldens`, `init` — see §10 for the real CLI.
+> The spec-authoring tutorial (§3–§6) is real, but only the `knob` generator is
+> built; other `new-test` types and `reaproof.toml` multi-OS matrices are
+> **target-only**. Platform: macOS (see README).
 
 This guide is for developers of REAPER extensions, plugins, and scripts who want to test them automatically and *trustworthily* — including the visual behaviour of GUI controls — without clicking through REAPER by hand every time.
 
-If you are building the platform itself, start from the test suite — it demonstrates every plane.
+If you are building the platform itself, read [`AGENT_BUILD_GUIDE.md`](AGENT_BUILD_GUIDE.md) instead.
 
 ---
 
@@ -31,11 +29,13 @@ If you are building the platform itself, start from the test suite — it demons
 
 ## 1. What you can test
 
-- **Plugins:** VST2, VST3, CLAP, AU (macOS), LV2 (Linux), JSFX
+- **Plugins:** VST2, VST3, CLAP, LV2, JSFX (AU via auval/pluginval)
 - **Native extensions:** REAPER C/C++ extensions (actions, API functions)
-- **Scripts:** Lua / EEL2 / Python ReaScripts and ReaImGui UIs
+- **Scripts:** Lua / EEL2 ReaScripts and ReaImGui UIs
+- **Themes:** .ReaperThemeZip (structural lint + live load + paint proof)
+- **ReaPack repositories:** metadata rules + per-package batteries
 
-And for each, across **Windows, macOS, and Linux**, at multiple **DPI scales** and across **multiple monitors**:
+Each subject type has a **zero-code battery** (`reaproof test <subject>`, `reaproof test-repo <dir>`) plus spec-level oracles for semantic checks (macOS today; see the README for platform status):
 
 - **Functional** — parameter ranges, value↔text, stepping, defaults
 - **DSP** — does the sound actually change the way the control claims (gain, EQ, latency, loudness, distortion, clicks)
@@ -50,16 +50,18 @@ The guarantee that makes this useful: **a green result means it really works, an
 
 ## 2. Installation
 
-**Prerequisites:** Python 3.11+. ReaProof downloads and manages its own pinned REAPER and validators, so you do not need REAPER pre-installed (though you can point it at an existing install).
+**Prerequisites:** Python 3.10+, macOS, REAPER 7.x installed.
 
 ```bash
-pip install reaproof          # or: pipx install reaproof (recommended for a CLI tool)
-
-# Download a pinned REAPER + the validators for your OS into ReaProof's cache:
-reaproof setup --reaper 7.75
+git clone https://github.com/b451c/reaproof && cd reaproof
+pip install -e .
+export REAPROOF_REAPER_APP=/Applications/REAPER.app   # point at your REAPER
 ```
 
-`setup` installs/locates: REAPER (portable, isolated profile), pluginval, clap-validator, clap-info, EditorHost, and — on macOS — wires up auval. On Linux it also checks for Xvfb (used to run the real GUI headlessly) and offers to install it.
+ReaProof runs everything in an isolated profile — your REAPER config is never
+touched. Optional tools (pluginval, clap-validator, `brew install lv2 sord`,
+luacheck) each unlock extra checks; every missing one degrades to an honest,
+visible skip.
 
 Verify:
 
@@ -73,8 +75,18 @@ reaproof doctor
 
 ## 3. Your first test in 10 minutes
 
+The fastest path is the zero-code battery — no files to write at all:
+
 ```bash
-# Scaffold a tests folder next to your plugin
+reaproof doctor
+reaproof test /path/to/MyPlugin.clap      # or .vst3/.lv2/.lua/reaper_*.dylib/.ReaperThemeZip
+open .cache/runs/autotest-MyPlugin/report.html
+```
+
+For SPEC tests (semantic checks on top of the battery), scaffold a folder
+(note: of the generator types below, only `knob` is implemented today):
+
+```bash
 reaproof init ./my-plugin-tests
 cd my-plugin-tests
 ```
@@ -332,28 +344,32 @@ Open the HTML report (`reaproof report --open`). For each test you'll see:
 ## 10. CLI reference
 
 ```
-reaproof setup [--reaper VERSION] [--with-validators]   Download/locate pinned REAPER + validators
-reaproof doctor [--signing]                             Verify the environment is correctly provisioned
-reaproof init PATH                                      Scaffold a tests folder + reaproof.toml
-reaproof new-test --type TYPE [--control C] [--param P] Generate a test (see §4 for types)
-reaproof run [PATHS] [options]                          Run tests
-    --mutation-check        Prove every assertion can fail (flag VACUOUS ones)
-    --dpi 100,150,200       DPI scales to test
-    --formats VST3,CLAP     Override formats
-    --sample-rates 44100,48000,96000
-    --block-sizes 64,512,1024
-    --strictness N          Validator strictness (1–10)
-    --skip-gui-tests        DSP-only (faster CI legs)
-    --repeat N              Determinism: run each test N times (default 2)
-    --seed 0xHEX            Fix RNG seed (recorded in provenance)
-    --os linux|windows|macos
-reaproof report [--open] [--format html|junit|json]     Show/export results + artifacts
-reaproof goldens review | approve                       Review/approve changed reference images
-reaproof ci init --provider github                      Generate CI workflow
+reaproof doctor                       Verify the environment (checks the app's real build string)
+reaproof setup                        Describe/verify provisioning
+reaproof test SUBJECT [options]       Zero-code battery; dispatched by type:
+                                      .clap/.vst3/.vst/.lv2  plugin battery
+                                        --full | --max-params N | --no-sweep | --instrument
+                                      .lua/.eel              script battery
+                                        --ui  --expect-modifies-project  --expect-extstate
+                                      reaper_*.dylib         extension battery
+                                        --run-actions (opt-in per-action smoke)
+                                      .ReaperThemeZip        theme battery
+reaproof test-repo DIR [--max-packages N]   ReaPack repository mode
+reaproof author SUBJECT --mode auto|interactive   Scaffold AI-assisted authoring
+reaproof features-report MANIFEST [--tests DIR]   Validate a feature manifest
+reaproof run [PATHS] [--mutation-check] [--repeat N] [--report DIR]
+                                      Run authored spec suites under the full
+                                      determinism lock (pytest plugin flags:
+                                      --reaproof-repeat, --mutation-check,
+                                      --reaproof-report)
+reaproof init PATH                    Scaffold a tests folder
+reaproof new-test --type TYPE         Generate a spec test skeleton
+reaproof goldens list|approve         Review/approve reference images (never auto)
+reaproof report                       Where results live
 ```
 
 ---
 
 ### Where to go next
 - The complete control-coverage taxonomy and tool/version details: [`REFERENCE.md`](REFERENCE.md).
-- How the platform guarantees trustworthy results: [`REFERENCE.md`](REFERENCE.md) §8 ("no false results").
+- How the platform guarantees trustworthy results (and how to extend it): [`AGENT_BUILD_GUIDE.md`](AGENT_BUILD_GUIDE.md), especially §1 ("no false results").
