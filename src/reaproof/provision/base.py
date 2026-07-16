@@ -207,10 +207,21 @@ class Provisioner(ABC):
         ``.cache/`` (gitignored), never VCS — CI containers ship only the subject
         and need no seeding. See DECISIONS D15.
         """
-        if not paths.WARM_CACHE.is_dir():
+        src_dir = paths.WARM_CACHE if paths.WARM_CACHE.is_dir() else None
+        if src_dir is None and paths.USER_REAPER_RES.is_dir():
+            # No project warm cache (fresh clone) but the USER'S own REAPER has
+            # complete scan caches — same machine, same plugin mtimes, so the
+            # skip-entries are valid. Without this, a first run against the
+            # user's plugin collection re-scans everything and can wedge on
+            # license-protected plugins (verified on a clean-clone smoke test:
+            # startup stuck at "Scanning VST plug-ins...").
+            src_dir = paths.USER_REAPER_RES
+        if src_dir is None:
             return
-        for src in paths.WARM_CACHE.glob("reaper-*.ini"):
-            shutil.copy2(src, profile.resource_dir / src.name)
+        for pattern in ("reaper-vstplugins*.ini", "reaper-clap-*.ini",
+                        "reaper-auplugins*.ini", "reaper-vstshells*.ini"):
+            for src in src_dir.glob(pattern):
+                shutil.copy2(src, profile.resource_dir / src.name)
 
     def _install_extensions(self, profile: IsolatedProfile) -> None:
         """Copy the REAPER-side extensions into the isolated profile.
