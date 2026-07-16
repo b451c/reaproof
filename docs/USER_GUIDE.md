@@ -9,7 +9,7 @@
 
 This guide is for developers of REAPER extensions, plugins, and scripts who want to test them automatically and *trustworthily* — including the visual behaviour of GUI controls — without clicking through REAPER by hand every time.
 
-If you are building the platform itself, read [`AGENT_BUILD_GUIDE.md`](AGENT_BUILD_GUIDE.md) instead.
+If you are building the platform itself, start from the test suite — it demonstrates every plane.
 
 ---
 
@@ -372,4 +372,4 @@ reaproof report                       Where results live
 
 ### Where to go next
 - The complete control-coverage taxonomy and tool/version details: [`REFERENCE.md`](REFERENCE.md).
-- How the platform guarantees trustworthy results (and how to extend it): [`AGENT_BUILD_GUIDE.md`](AGENT_BUILD_GUIDE.md), especially §1 ("no false results").
+- How the platform guarantees trustworthy results: [`REFERENCE.md`](REFERENCE.md) §8 ("no false results").
