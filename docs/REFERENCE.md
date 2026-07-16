@@ -82,6 +82,12 @@ Representative functions (full list at the ReaScript API docs):
 
 > Check exact, current signatures in the searchable ReaScript API doc (X‑Raym mirror) — js_ functions are listed there alongside native ones.
 
+> ReaImGui API (for scripts using ImGui UIs): the canonical generated doc is
+> https://cfillion.ca/reaper_imgui_doc.html (tracks the latest release); for an
+> EXACT match with your installed extension use the reaper_imgui_doc.html asset
+> of that release on Codeberg (cfillion/reaimgui). Ground truth for what the
+> pinned profile actually exposes: reaper.APIExists / pairs(reaper) via the bridge.
+
 ### 3.2b Input delivery on macOS — which channel reaches which target
 
 Verified on the pinned REAPER 7.75 (Quality Audit v2 #5). Three channels, three
