@@ -17,6 +17,7 @@ whose invocation writes ExtState ``reaproof_testext/ping=1``.
   gate can turn RED.
 """
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,11 @@ from reaproof.provision.base import get_provisioner
 from reaproof.runner.session import ReaperSession
 
 ACTION = "REAPROOF_TEST_EXT_PING"
+
+# The whole install mechanism under test is macOS-specific (dylib subjects
+# built with clang -arch arm64, Gatekeeper quarantine, UserPlugins layout).
+pytestmark = pytest.mark.skipif(sys.platform != "darwin",
+                                reason="extension install semantics are macOS")
 
 
 def _ensure_ext_subject() -> Path:
