@@ -39,7 +39,20 @@ def _reaper_app() -> Path:
 REAPER_APP = _reaper_app()
 REAPER_BIN = REAPER_APP / "Contents" / "MacOS" / "REAPER"
 REAPER_VERSION = os.environ.get("REAPROOF_REAPER_VERSION", "7.75")
-REAPER_BUILD = os.environ.get("REAPROOF_REAPER_BUILD", "7.75.0_e2e941bu")
+
+
+def _reaper_build_claim() -> str:
+    env = os.environ.get("REAPROOF_REAPER_BUILD")
+    if env:
+        return env
+    if os.environ.get("REAPROOF_REAPER_APP"):
+        # user points at their own install without pinning a build: the claim
+        # follows the MEASURED app (a stale pinned default would be a false
+        # provenance claim about somebody else's REAPER)
+        measured = reaper_app_build(REAPER_APP)
+        if measured:
+            return measured
+    return "7.75.0_e2e941bu"
 
 
 def reaper_app_build(app: Path | None = None) -> str | None:
@@ -101,6 +114,9 @@ REQUIRED_EXTENSIONS = (
     "reaper_sws-arm64.dylib",
     "reaper_imgui-arm64.dylib",
 )
+
+
+REAPER_BUILD = _reaper_build_claim()
 
 
 def ensure_runs_dir() -> Path:
