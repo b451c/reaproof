@@ -39,3 +39,4 @@ CLAUDE.md
 FINAL_REPORT.md
 assessments/
 .claude/settings*.json
+.claude/commands/session-*.md
