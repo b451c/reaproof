@@ -31,11 +31,12 @@ report_html/
 !goldens/**
 
 # Private workflow files (never published; belt-and-braces for future syncs)
+# NOTE: CLAUDE.md here is the PUBLIC agent-notes file (tracked on purpose);
+# the private one lives only in the internal repo.
 STATE.md
 PROGRESS.md
 DECISIONS.md
 AUDIT.md
-CLAUDE.md
 FINAL_REPORT.md
 assessments/
 .claude/settings*.json
