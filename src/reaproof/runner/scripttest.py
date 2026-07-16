@@ -219,7 +219,9 @@ def _stage_action(script: Path, opts: ScriptTestOptions,
 def run_script_battery(script: Path, out_dir: Path | None = None,
                        opts: ScriptTestOptions | None = None, *,
                        log=print) -> ResultSet:
-    script = Path(script)
+    # absolute: the Lua chunk dofile()s this path inside REAPER, whose cwd
+    # is NOT the caller's (relative paths fail with 'cannot open')
+    script = Path(script).resolve()
     opts = opts or ScriptTestOptions()
     rs = ResultSet()
     suffix = script.suffix.lower()
