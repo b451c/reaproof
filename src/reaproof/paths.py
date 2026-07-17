@@ -7,6 +7,7 @@ binaries live under ``.cache/`` (gitignored); durable evidence is the run bundle
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -104,7 +105,16 @@ CLAP_VALIDATOR = TOOLS / "clap-validator-bin" / "binaries" / "clap-validator"
 
 # Source for REAPER-side extensions (copied into each isolated profile's UserPlugins).
 # Reused from the user's install per DECISIONS D10.
-USER_REAPER_RES = Path.home() / "Library" / "Application Support" / "REAPER"
+# The USER's own REAPER resource dir — per-OS (the CI Linux leg exposed a
+# mac-hardcoded path here: extensions/license/python-config mirroring all
+# silently missed on Linux/Windows).
+if sys.platform == "darwin":
+    USER_REAPER_RES = Path.home() / "Library" / "Application Support" / "REAPER"
+elif sys.platform == "win32":
+    USER_REAPER_RES = Path(os.environ.get("APPDATA",
+                                          Path.home() / "AppData" / "Roaming")) / "REAPER"
+else:
+    USER_REAPER_RES = Path.home() / ".config" / "REAPER"
 USER_USERPLUGINS = USER_REAPER_RES / "UserPlugins"
 USER_LICENSE = USER_REAPER_RES / "reaper-license.rk"
 

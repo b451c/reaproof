@@ -19,11 +19,22 @@ out_pin:left output
 out_pin:right output
 
 @init
-gmem[0] != 0 ? slider1 = gmem[0];   // leak IN: a previous instance's value
+leak_pending = (gmem[0] != 0) ? 1 : 0;   // leak IN: previous instance's value
 
 @slider
 gain = 10^(slider1/20);
 slider1 != 0 ? gmem[0] = slider1;   // leak OUT: survives this instance
+
+@block
+// the leak reaches the HOST through the official notify path — an @init
+// slider-variable write alone is host-visible on macOS but NOT on Linux
+// (live-verified platform difference), while slider_automate() propagates
+// everywhere; real leaky FX use exactly this channel
+leak_pending ? (
+  slider1 = gmem[0];
+  slider_automate(slider1);
+  leak_pending = 0;
+);
 
 @sample
 spl0 *= gain;

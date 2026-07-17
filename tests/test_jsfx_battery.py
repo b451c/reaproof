@@ -428,6 +428,14 @@ def test_unguarded_truncation_restore_is_red(tmp_path):
 
 
 @darwin
+@pytest.mark.skipif(sys.platform == "linux",
+                    reason="no host-visible leak channel on idle Linux "
+                           "dummy-audio sessions: neither an @init slider "
+                           "write nor @block slider_automate propagates to "
+                           "the wrapper there (live-verified on 7.69 VM and "
+                           "7.75 CI; macOS propagates both). The chunk "
+                           "oracle itself is exercised cross-platform by the "
+                           "serialize gates.")
 @pytest.mark.reaper
 @pytest.mark.slow
 @pytest.mark.negative_control
