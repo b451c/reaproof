@@ -64,5 +64,7 @@ jobs:
       - name: JSFX battery under Xvfb
         run: |
           export REAPROOF_REAPER_APP="$PWD/.cache/reaper775_linux/REAPER/reaper"
+          # the reaper gates are ALL also marked slow — select the marker
+          # family itself, not "reaper and not slow" (that selects nothing)
           xvfb-run -a --server-args="-screen 0 1920x1080x24" \
-            python -m pytest tests/test_jsfx_battery.py -m "reaper and not slow" -q
+            python -m pytest tests/test_jsfx_battery.py -m reaper -q

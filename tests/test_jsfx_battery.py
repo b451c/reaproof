@@ -19,10 +19,13 @@ from reaproof.runner.jsfxtest import (
     run_jsfx_battery,
 )
 
-# REAPER-launching gates need the macOS session stack; the parser units and
-# the static-only battery paths are platform-independent and run everywhere
-darwin = pytest.mark.skipif(sys.platform != "darwin",
-                            reason="JSFX battery gates use the macOS session stack")
+# REAPER-launching gates run on macOS and Linux (both session stacks are
+# live-verified); the parser units and static-only battery paths run
+# everywhere. Windows is excluded from THIS suite only because its battery
+# leg runs against a provisioned VM, not the local host, for now.
+darwin = pytest.mark.skipif(sys.platform == "win32",
+                            reason="Windows battery leg runs on the "
+                                   "provisioned VM, not in this suite yet")
 
 JSFX = paths.EXAMPLES / "jsfx"
 
