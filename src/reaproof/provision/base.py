@@ -183,6 +183,7 @@ class Provisioner(ABC):
             "autosavemode=0",                 # no autosave churn
             "loadlastproj=0",                 # always a clean empty project
             f"uiscale={ui:.6f}",              # pin UI scale from the lock (DPI determinism)
+            *self._python_ini_lines(),        # mirror the user's ReaScript-Python setup
             *self._audio_ini_lines(lock),     # SR/block pinned; suppress the no-audio modal
             "[nag]",
             "nag=65535",                      # never the unlicensed nag (license copied in)
@@ -202,6 +203,28 @@ class Provisioner(ABC):
     def _audio_ini_lines(self, lock: DeterminismLock) -> list[str]:
         """Platform default: no audio config (subclasses override)."""
         return []
+
+    def _python_ini_lines(self) -> list[str]:
+        """Mirror the USER's ReaScript-Python config into the profile.
+
+        Python support needs three [reaper] keys (``reascript=1`` +
+        ``pythonlibdll64``/``pythonlibpath64``); the values are host-specific
+        (which interpreter the user installed), so the honest source is the
+        user's own working reaper.ini — exactly like extensions and the
+        license. No user config → no keys → the .py battery skips honestly.
+        (Live-verified: a .py action registers and runs in the isolated
+        profile with these three keys; without ``reascript=1`` or with the
+        keys outside [reaper], AddRemoveReaScript returns 0.)
+        """
+        user_ini = paths.USER_REAPER_RES / "reaper.ini"
+        if not user_ini.exists():
+            return []
+        lines = []
+        for raw in user_ini.read_text(encoding="utf-8",
+                                      errors="replace").splitlines():
+            if raw.startswith(("pythonlibdll64=", "pythonlibpath64=")):
+                lines.append(raw.strip())
+        return ["reascript=1", *lines] if len(lines) == 2 else []
 
     def _seed_plugin_caches(self, profile: IsolatedProfile) -> None:
         """Seed REAPER's plugin-scan caches so a fresh profile skips the rescan.

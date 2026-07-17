@@ -358,8 +358,14 @@ reaproof test SUBJECT [options]       Zero-code battery; dispatched by type:
                                         alongside; tags: instrument + pin
                                         declarations shape the audio checks
                                         --full | --max-params N | --no-sweep | --instrument
-                                      .lua/.eel              script battery
+                                      .component             AU battery (macOS; semi-hermetic:
+                                        AU discovery is system-wide - auval + load +
+                                        render + bit-identical re-render)
+                                      .lua/.eel/.py          script battery (.py needs the host
+                                        REAPER's ReaScript-Python configured; the
+                                        profile mirrors that config)
                                         --ui  --expect-modifies-project  --expect-extstate
+                                        --expect-gmem (declared shared-memory writes)
                                       reaper_*.dylib         extension battery
                                         --run-actions (opt-in per-action smoke)
                                       .ReaperThemeZip        theme battery

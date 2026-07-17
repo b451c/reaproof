@@ -137,3 +137,43 @@ def test_ui_subject_window_is_checked(tmp_path):
     rs2 = run_script_battery(SCRIPTS / "rp_good.lua", out_dir=tmp_path / "mut",
                              opts=ScriptTestOptions(ui=True), log=_quiet)
     assert _statuses(rs2)["ui: window appeared"] == "failed"
+
+
+# ---- Python ReaScript gates ---------------------------------------------------
+
+from reaproof.runner.scripttest import python_configured
+
+pyconf = pytest.mark.skipif(
+    not python_configured(),
+    reason="host REAPER has no ReaScript-Python configured — the profile "
+           "mirrors the host config, so there is nothing to run .py with")
+
+
+@pyconf
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.gate
+def test_python_subject_is_green(tmp_path):
+    """A .py subject registers as a real action and runs cleanly under
+    supervision (interpreter mirrored from the host config)."""
+    rs = run_script_battery(SCRIPTS / "rp_good.py", out_dir=tmp_path, log=_quiet)
+    st = _statuses(rs)
+    assert rs.gate_green, st
+    assert st["metadata: ReaPack header"] == "passed"
+    assert st["action: registers and resolves"] == "passed"
+    assert st["action: runs without runtime error"] == "passed"
+
+
+@pyconf
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.negative_control
+def test_python_runtime_error_is_red(tmp_path):
+    """A raising .py surfaces the same terminal ReaScript Error panel as Lua —
+    the watchdog supervision must catch it."""
+    rs = run_script_battery(SCRIPTS / "rp_error_run.py", out_dir=tmp_path,
+                            log=_quiet)
+    assert not rs.gate_green
+    run = next(r for r in rs.results
+               if r.name == "action: runs without runtime error")
+    assert run.status == "failed"

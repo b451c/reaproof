@@ -81,26 +81,38 @@ def _stage_luacheck(script: Path, rs: ResultSet, log) -> None:
 
 # ---- stage 2: ReaPack header lint --------------------------------------------
 
-_TAG = re.compile(r"^\s*(?:--|//|/\*|@)?\s*@(\w+)\s*(.*)$")
+_TAG = re.compile(r"^\s*(?:--|//|#|/\*|@)?\s*@(\w+)\s*(.*)$")
 
 
 def parse_reapack_header(text: str) -> dict[str, str] | None:
     """The leading-comment ReaPack header as {tag: value}, or None if absent.
 
     Comment prefixes cover the packaged languages: ``--`` (Lua/EEL),
-    ``//`` (JSFX/EEL2), ``/* */`` blocks. A JSFX package's header follows its
-    ``desc:`` line, so non-comment directive lines never terminate the scan
-    before the first tag is seen.
+    ``//`` (JSFX/EEL2), ``#`` (Python), ``/* */`` blocks. A JSFX package's
+    header follows its ``desc:`` line, so non-comment directive lines never
+    terminate the scan before the first tag is seen.
     """
     tags: dict[str, str] = {}
     for line in text.splitlines()[:80]:
         stripped = line.strip()
-        if tags and not stripped.startswith(("--", "//", "*", "@")) and stripped != "":
+        if tags and not stripped.startswith(("--", "//", "#", "*", "@")) \
+                and stripped != "":
             break
         m = _TAG.match(line)
         if m:
             tags.setdefault(m.group(1).lower(), m.group(2).strip())
     return tags or None
+
+
+def python_configured() -> bool:
+    """True iff the HOST REAPER has ReaScript-Python configured — the isolated
+    profile mirrors those ini keys (see Provisioner._python_ini_lines)."""
+    from reaproof import paths
+    user_ini = paths.USER_REAPER_RES / "reaper.ini"
+    if not user_ini.exists():
+        return False
+    text = user_ini.read_text(encoding="utf-8", errors="replace")
+    return "pythonlibdll64=" in text and "pythonlibpath64=" in text
 
 
 def _stage_header(script: Path, rs: ResultSet, log) -> None:
@@ -205,11 +217,15 @@ def _stage_action(script: Path, opts: ScriptTestOptions,
         _add(rs, log, "action: registers and resolves", "passed",
              message=f"cmd={cmd} _{named or '?'}")
 
+        # the FIRST .py action initialises the embedded interpreter, which can
+        # stall the main thread for several seconds (live-measured) — give the
+        # supervision window that headroom before judging the engine dead
+        settle = opts.settle + (6.0 if script.suffix.lower() == ".py" else 0.0)
         with DialogMonitor(s.handle.pid,
                            evidence_dir=(art / "dialogs") if art else None) as mon:
             s.eval(f"reaper.defer(function() reaper.Main_OnCommand({cmd}, 0) end); "
                    "return true")
-            deadline = time.monotonic() + opts.settle
+            deadline = time.monotonic() + settle
             verdict = None
             while time.monotonic() < deadline:
                 if any("ReaScript Error" in p.title for p in mon.sightings()):
@@ -242,10 +258,12 @@ def run_script_battery(script: Path, out_dir: Path | None = None,
     opts = opts or ScriptTestOptions()
     rs = ResultSet()
     suffix = script.suffix.lower()
-    if suffix == ".py":
+    if suffix == ".py" and not python_configured():
         _add(rs, log, "script battery", "skipped",
-             message="Python ReaScripts need a configured interpreter — "
-                     "not supported by the universal battery yet")
+             message="the host REAPER has no ReaScript-Python configured "
+                     "(Preferences > Plug-ins > ReaScript) — the isolated "
+                     "profile mirrors that config, so there is nothing to "
+                     "run the subject with")
         _emit(rs, out_dir, script)
         return rs
 

@@ -49,6 +49,8 @@ reaproof test MyEffect.jsfx            # JSFX battery (compile proof, slider
 reaproof test my_script.lua            # ReaScript battery
 reaproof test reaper_myext.dylib       # native-extension battery
 reaproof test MyTheme.ReaperThemeZip   # theme battery
+reaproof test MyPlugin.component       # AU battery (auval + load + render)
+reaproof test my_script.py             # Python ReaScript battery
 reaproof test-repo path/to/repo        # a whole ReaPack repository
 open .cache/runs/autotest-*/report.html
 ```
@@ -114,7 +116,7 @@ See `docs/REFERENCE.md` §8 for the full guarantee table.
 
 ```
 reaproof doctor                 environment health check
-reaproof test <subject>         zero-code battery (plugin/jsfx/script/extension/theme)
+reaproof test <subject>         zero-code battery (plugin/AU/jsfx/script incl .py/extension/theme)
 reaproof test-repo <dir>        ReaPack repository mode
 reaproof author <subject>       scaffold AI-assisted test authoring
 reaproof features-report <m>    validate a feature manifest (anti-fabrication)

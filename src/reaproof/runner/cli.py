@@ -101,8 +101,9 @@ def _print_verdict(rs, out) -> int:
 
 def cmd_test(args) -> int:
     """Universal, zero-code test — dispatched by subject type:
-    .clap/.vst3/.vst -> plugin battery; .lua/.eel/.py -> ReaScript battery;
-    reaper_*.dylib -> native-extension battery; .jsfx -> JSFX battery."""
+    .clap/.vst3/.vst -> plugin battery; .component -> AU battery (macOS);
+    .lua/.eel/.py -> ReaScript battery; reaper_*.dylib -> native-extension
+    battery; .jsfx -> JSFX battery."""
     subject = Path(args.plugin)
     if not subject.exists():
         print(f"subject not found: {subject}")
@@ -126,6 +127,10 @@ def cmd_test(args) -> int:
     if subject.suffix.lower() in (".reaperthemezip", ".reapertheme"):
         from reaproof.runner.themetest import run_theme_battery
         rs = run_theme_battery(subject, out_dir=out)
+        return _print_verdict(rs, out)
+    if subject.suffix.lower() == ".component":
+        from reaproof.runner.aubattery import AuTestOptions, run_au_battery
+        rs = run_au_battery(subject, out_dir=out, opts=AuTestOptions())
         return _print_verdict(rs, out)
     if subject.suffix.lower() == ".jsfx":
         from reaproof.runner.jsfxtest import JsfxTestOptions, run_jsfx_battery
@@ -273,8 +278,8 @@ def main(argv=None) -> int:
     sp.set_defaults(func=cmd_run)
 
     sp = sub.add_parser("test", help="universal zero-code test of a plugin "
-                                     "(.clap/.vst3/.vst), JSFX (.jsfx), ReaScript "
-                                     "(.lua/.eel), extension or theme")
+                                     "(.clap/.vst3/.vst/.component), JSFX (.jsfx), "
+                                     "ReaScript (.lua/.eel/.py), extension or theme")
     sp.add_argument("plugin", help="path to the plugin bundle / script")
     sp.add_argument("--out", default=None, help="report output dir")
     sp.add_argument("--full", action="store_true", help="sweep ALL parameters (no cap)")
