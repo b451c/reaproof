@@ -1,6 +1,6 @@
 # ReaProof — User Guide
 
-> **As-built note (2026-07-17).** Accurate today: the zero-code batteries
+> **As-built note (2026-07-17, v0.4.0).** Accurate today: the zero-code batteries
 > (`reaproof test`, `reaproof test-repo`), the agent-authoring flow (`author`,
 > `features-report`), `doctor`, `run`, `goldens`, `init` — see §10 for the real CLI.
 > The spec-authoring tutorial (§3–§6) is real, but only the `knob` generator is

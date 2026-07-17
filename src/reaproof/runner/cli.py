@@ -130,12 +130,14 @@ def cmd_test(args) -> int:
         return _print_verdict(rs, out)
     if subject.suffix.lower() == ".component":
         from reaproof.runner.aubattery import AuTestOptions, run_au_battery
-        rs = run_au_battery(subject, out_dir=out, opts=AuTestOptions())
+        rs = run_au_battery(subject, out_dir=out,
+                            opts=AuTestOptions(signals=not args.quick))
         return _print_verdict(rs, out)
     if subject.suffix.lower() == ".jsfx":
         from reaproof.runner.jsfxtest import JsfxTestOptions, run_jsfx_battery
         rs = run_jsfx_battery(subject, out_dir=out, opts=JsfxTestOptions(
-            sweep_params=not args.no_sweep,
+            signals=not args.quick,
+            sweep_params=not (args.no_sweep or args.quick),
             max_params=args.max_params,
             full=args.full,
             is_instrument=args.instrument,
@@ -302,6 +304,10 @@ def main(argv=None) -> int:
     sp.add_argument("--run-actions", action="store_true",
                     help="extension: RUN each registered action under supervision "
                          "(opt-in — actions can be destructive/interactive)")
+    sp.add_argument("--quick", action="store_true",
+                    help="jsfx/AU: structural stages only (compile proof, param "
+                         "mapping, state checks) — ~40s instead of minutes, for "
+                         "fast agent/dev iteration; run without it before release")
     sp.set_defaults(func=cmd_test)
 
     sp = sub.add_parser("goldens", help="review/approve reference images (never auto-update)")

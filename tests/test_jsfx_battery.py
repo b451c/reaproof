@@ -310,6 +310,30 @@ def test_synth_sounds_and_is_deterministic_under_the_note_feed(tmp_path):
 @darwin
 @pytest.mark.reaper
 @pytest.mark.slow
+@pytest.mark.gate
+def test_silent_sampler_shape_skips_honestly(tmp_path):
+    """A GUI-loading sampler keeps its material in @serialize, not in file
+    sliders — silent-without-a-setup must be an HONEST SKIP with the capture
+    instruction, never a false red (a pure synth with no serialized state
+    still hard-fails: it has nothing to wait for)."""
+    subj = tmp_path / "SamplerShape.jsfx"
+    subj.write_text(
+        (JSFX / "ReaProof_Synth_BrokenSilent.jsfx").read_text().replace(
+            "@sample\n",
+            "@serialize\nfile_var(0, loaded_setup);\n\n@sample\n", 1))
+    rs = run_jsfx_battery(
+        subj, out_dir=tmp_path / "out",
+        opts=JsfxTestOptions(signal_names=("sine_1k",), extra_rates=(),
+                             sweep_params=False), log=_quiet)
+    prod = next(r for r in rs.results
+                if r.name == "midi: produces audio for the note feed")
+    assert prod.status == "skipped", prod.message
+    assert "@serialize" in prod.message and "prevchunk" in prod.message
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
 @pytest.mark.negative_control
 def test_silent_synth_is_red_for_the_note_feed(tmp_path):
     rs = run_jsfx_battery(

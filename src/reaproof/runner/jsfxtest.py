@@ -368,7 +368,13 @@ def _stage_compile_and_params(subject: Path, source: JsfxSource, add,
                 break
             time.sleep(0.3)
         errors = [t for t in statics if _ERROR_TEXT.match(t)]
-        desc_shown = bool(source.desc) and source.desc in statics
+        # exact desc match, or an unambiguous prefix (>= 24 chars) — a very
+        # long desc can come back truncated from the window control, and that
+        # must not read as "compile status unverified"
+        desc_shown = bool(source.desc) and any(
+            t == source.desc
+            or (len(t) >= 24 and source.desc.startswith(t))
+            for t in statics)
         gfx_note = ""
         if source.gfx_funcs_used_outside:
             gfx_note = (" — likely cause: function(s) defined in @gfx but used "
@@ -797,6 +803,7 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         if midi_r is not None:
             needs_assets = (any(d.is_file for d in source.sliders)
                             or bool(source.filenames))
+            has_serialize = "serialize" in source.sections
             rms = A.rms_dbfs(midi_r.samples)
             if not source.writes_audio:
                 add("midi: produces audio for the note feed", "skipped",
@@ -808,6 +815,17 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
                             "filename resources — a sampler without its "
                             "assets is not provably broken (load assets and "
                             "author a spec to cover this)")
+            elif has_serialize and rms <= -80.0:
+                # a sampler that loads its material via the UI keeps it in
+                # @serialize, not in file sliders — silent-without-a-setup is
+                # not provably broken. (A pure synth with NO serialized state
+                # still hard-fails below: it has nothing to wait for.)
+                add("midi: produces audio for the note feed", "skipped",
+                    message="silent, and the subject carries @serialize state "
+                            "— it may need a saved setup (samples/preset) to "
+                            "make sound; capture one as <subject>.jsfx"
+                            ".prevchunk or author a spec with a prepared "
+                            "state chunk")
             elif rms > -80.0:
                 add("midi: produces audio for the note feed", "passed",
                     message=f"{rms:.1f} dBFS for the reference notes")

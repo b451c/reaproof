@@ -3,7 +3,7 @@
 ![platform: macOS](https://img.shields.io/badge/platform-macOS-informational)
 ![Windows / Linux: WIP](https://img.shields.io/badge/Windows%20%2F%20Linux-WIP-lightgrey)
 ![license: MIT](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.3.0-blue)
+![version](https://img.shields.io/badge/version-0.4.0-blue)
 
 > **Platform: macOS today (full batteries).** Linux: the control plane and the
 > offline render pipeline are live-verified against a real REAPER (structural
@@ -141,6 +141,20 @@ examples/            reference subjects incl. deliberately BROKEN variants
 tests/               the platform's own suite — it tests itself the same way
 docs/                USER_GUIDE.md · REFERENCE.md · AGENT_TEST_AUTHORING.md
 ```
+
+## Updating
+
+ReaProof installs editable, so updating is one pull:
+
+```bash
+cd reaproof && git pull && reaproof doctor
+```
+
+`reaproof doctor` re-checks the environment after the update. Releases are
+tagged (`git tag -l`); `main` is kept green (the platform tests itself with
+its own doctrine). Heads-up: updates can ADD checks — a subject that was
+green may honestly turn red because coverage grew, not because it regressed;
+the report names exactly which new check fired.
 
 ## Requirements
 
