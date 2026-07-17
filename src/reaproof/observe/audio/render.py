@@ -78,6 +78,30 @@ def _offline_render(rpp: Path, ini: Path, out: Path, *, timeout: float = 120.0,
         subprocess.run(["pkill", "-9", "-f", f"cfgfile {ini}"], capture_output=True)
 
 
+#: the deterministic reference note clip for instrument subjects:
+#: (start_s, dur_s, midi_pitch, velocity) — a mid-register note, a low note and
+#: a two-note chord, inside the first second
+REFERENCE_NOTES: tuple[tuple[float, float, int, int], ...] = (
+    (0.05, 0.40, 60, 100),
+    (0.50, 0.35, 48, 90),
+    (0.50, 0.35, 64, 70),
+)
+
+
+def _midi_notes_lua(notes, item_len: float) -> str:
+    """Lua that creates a MIDI item on ``tr`` carrying the given notes."""
+    ins = "\n".join(
+        f"  reaper.MIDI_InsertNote(take, false, false, "
+        f"reaper.MIDI_GetPPQPosFromProjTime(take, {s:.6f}), "
+        f"reaper.MIDI_GetPPQPosFromProjTime(take, {s + d:.6f}), "
+        f"0, {int(pitch)}, {int(vel)}, true)"
+        for s, d, pitch, vel in notes)
+    return (f"do\n  local it = reaper.CreateNewMIDIItemInProj(tr, 0.0, "
+            f"{item_len:.6f}, false)\n"
+            f"  local take = reaper.GetActiveTake(it)\n{ins}\n"
+            f"  reaper.MIDI_Sort(take)\nend")
+
+
 def render_through_jsfx(
     fx_name: str,
     *,
@@ -90,6 +114,7 @@ def render_through_jsfx(
     extra_setup: str = "",
     name: str = "render",
     render_timeout: float = 120.0,
+    midi_notes=None,
 ) -> RenderResult:
     """Render ``input_signal`` through a JSFX with the given parameter values.
 
@@ -97,9 +122,15 @@ def render_through_jsfx(
     in scope) — e.g. to attach a parameter automation envelope before rendering.
     ``render_timeout`` bounds the offline render; a stalled audio thread (runaway
     JSFX loop) surfaces as the TimeoutError instead of wedging the suite.
+    ``midi_notes`` (list of ``(start_s, dur_s, pitch, velocity)``) additionally
+    places a MIDI item on the track — the deterministic note feed for
+    instrument subjects (mechanics live-verified: bit-identical re-renders).
     """
     lock = lock or DeterminismLock(sample_rate=sample_rate)
     params = params or {}
+    if midi_notes:
+        item_len = len(np.asarray(input_signal)) / float(sample_rate)
+        extra_setup = _midi_notes_lua(midi_notes, item_len) + "\n" + extra_setup
     s = ReaperSession(name, jsfx=jsfx_files, lock=lock)
     s.start()
     prof = s.profile
@@ -118,27 +149,32 @@ def render_through_jsfx(
         f"reaper.SetMediaTrackInfo_Value(tr, 'I_NCHAN', {nch})\n"
         f"reaper.SetMediaTrackInfo_Value(reaper.GetMasterTrack(0), 'I_NCHAN', {nch})"
     ) if channels > 2 else ""
-    built = s.eval(f"""
-    while reaper.CountTracks(0) > 0 do reaper.DeleteTrack(reaper.GetTrack(0,0)) end
-    reaper.InsertTrackAtIndex(0, false)
-    local tr = reaper.GetTrack(0,0)
-    reaper.SetOnlyTrackSelected(tr)
-    reaper.SetEditCurPos(0, false, false)
-    reaper.InsertMedia([[{inp}]], 0)
-    {set_nchan}
-    local fx = reaper.TrackFX_AddByName(tr, '{fx_name}', false, -1)
-    if fx < 0 then return {{err='fx not found: {fx_name}'}} end
-    {set_params}
-    {extra_setup}
-    reaper.GetSetProjectInfo(0, 'RENDER_BOUNDSFLAG', 1, true)   -- entire project
-    reaper.GetSetProjectInfo(0, 'RENDER_SRATE', {sample_rate}, true)
-    reaper.GetSetProjectInfo(0, 'RENDER_CHANNELS', {channels}, true)
-    reaper.GetSetProjectInfo_String(0, 'RENDER_FILE', [[{out}]], true)
-    reaper.GetSetProjectInfo_String(0, 'RENDER_PATTERN', '', true)
-    reaper.Main_SaveProjectEx(0, [[{rpp}]], 0)
-    return {{fx=fx, items=reaper.CountMediaItems(0)}}
-    """)
-    s.stop()
+    try:
+        built = s.eval(f"""
+        while reaper.CountTracks(0) > 0 do reaper.DeleteTrack(reaper.GetTrack(0,0)) end
+        reaper.InsertTrackAtIndex(0, false)
+        local tr = reaper.GetTrack(0,0)
+        reaper.SetOnlyTrackSelected(tr)
+        reaper.SetEditCurPos(0, false, false)
+        reaper.InsertMedia([[{inp}]], 0)
+        {set_nchan}
+        local fx = reaper.TrackFX_AddByName(tr, '{fx_name}', false, -1)
+        if fx < 0 then return {{err='fx not found: {fx_name}'}} end
+        {set_params}
+        {extra_setup}
+        reaper.GetSetProjectInfo(0, 'RENDER_BOUNDSFLAG', 1, true)   -- entire project
+        reaper.GetSetProjectInfo(0, 'RENDER_SRATE', {sample_rate}, true)
+        reaper.GetSetProjectInfo(0, 'RENDER_CHANNELS', {channels}, true)
+        reaper.GetSetProjectInfo_String(0, 'RENDER_FILE', [[{out}]], true)
+        reaper.GetSetProjectInfo_String(0, 'RENDER_PATTERN', '', true)
+        reaper.Main_SaveProjectEx(0, [[{rpp}]], 0)
+        return {{fx=fx, items=reaper.CountMediaItems(0)}}
+        """)
+    finally:
+        # a bridge error must not orphan the session's REAPER — the plugin
+        # path always had this finally, the JSFX path leaked its instance on
+        # an eval raise (user-spotted as a stuck loading screen)
+        s.stop()
     if isinstance(built, dict) and built.get("err"):
         raise RuntimeError(f"render build failed: {built['err']}")
 

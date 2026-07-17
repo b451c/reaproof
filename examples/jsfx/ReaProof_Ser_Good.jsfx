@@ -1,0 +1,27 @@
+desc:ReaProof Serialize (well-behaved)
+// GOOD reference subject for the serialize checks: the payload derives ONLY
+// from parameter state (stable across repeated saves), and the read path
+// tolerates a truncated stream - file_var() on an exhausted stream yields 0
+// into an INTERNAL variable, never into a slider, so a corrupted project
+// restores at defaults instead of garbage.
+
+slider1:0<-24,24,0.01>Gain (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+stored = 0;
+
+@slider
+gain = 10^(slider1/20);
+stored = slider1;
+
+@sample
+spl0 *= gain;
+spl1 *= gain;
+
+@serialize
+file_var(0, stored);

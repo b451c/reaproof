@@ -285,6 +285,124 @@ def test_quad_split_renders_four_channels():
 @darwin
 @pytest.mark.reaper
 @pytest.mark.slow
+@pytest.mark.gate
+def test_synth_sounds_and_is_deterministic_under_the_note_feed(tmp_path):
+    """An instrument subject is driven by the deterministic reference note
+    clip: it must produce audio, stay pathology-free and re-render
+    bit-identically. tags: instrument is detected from the source."""
+    rs = run_jsfx_battery(
+        JSFX / "ReaProof_Synth.jsfx", out_dir=tmp_path,
+        opts=JsfxTestOptions(signal_names=("sine_1k",), extra_rates=(),
+                             sweep_params=True), log=_quiet)
+    st = _statuses(rs)
+    assert rs.gate_green, st
+    assert st["midi: renders under the reference note feed"] == "passed"
+    prod = next(r for r in rs.results
+                if r.name == "midi: produces audio for the note feed")
+    assert prod.status == "passed" and "dBFS" in prod.message
+    assert st["midi: note-feed re-render is bit-identical"] == "passed"
+    # no false red from the input-signal determinism check (synth is silent
+    # without notes — proven by the note-feed re-render instead)
+    assert st["determinism: re-render is bit-identical"] == "skipped"
+    assert st["param sweep [0] Level: stable across range"] == "passed"
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.negative_control
+def test_silent_synth_is_red_for_the_note_feed(tmp_path):
+    rs = run_jsfx_battery(
+        JSFX / "ReaProof_Synth_BrokenSilent.jsfx", out_dir=tmp_path,
+        opts=JsfxTestOptions(signal_names=("sine_1k",), extra_rates=(),
+                             sweep_params=False), log=_quiet)
+    assert not rs.gate_green
+    prod = next(r for r in rs.results
+                if r.name == "midi: produces audio for the note feed")
+    assert prod.status == "failed"
+    assert "silent" in prod.message
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.gate
+def test_wellbehaved_serialize_is_green(tmp_path):
+    """Catalog items 3-4, green path: a parameter-derived payload is byte-
+    identical across repeated saves, and a mid-stream truncation restores to
+    defaults with the FX intact."""
+    rs = run_jsfx_battery(
+        JSFX / "ReaProof_Ser_Good.jsfx", out_dir=tmp_path,
+        opts=JsfxTestOptions(signals=False, sweep_params=False), log=_quiet)
+    st = _statuses(rs)
+    assert rs.gate_green, st
+    assert st["state: repeated saves serialize identically"] == "passed"
+    assert st["state: truncated serialize data restores to defaults"] == "passed"
+    assert st["state: remove + re-add is factory reset"] == "passed"
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.gate
+def test_prev_release_chunk_roundtrip(tmp_path):
+    """Catalog item 5 (opt-in): the battery emits virgin_state.chunk; shipped
+    next to the subject as <name>.prevchunk it must load cleanly into the
+    current build. Proven with the battery's own artifact as the capsule."""
+    import shutil
+    subj = tmp_path / "Ser_Good.jsfx"
+    shutil.copy2(JSFX / "ReaProof_Ser_Good.jsfx", subj)
+    rs1 = run_jsfx_battery(subj, out_dir=tmp_path / "r1",
+                           opts=JsfxTestOptions(signals=False,
+                                                sweep_params=False), log=_quiet)
+    st1 = _statuses(rs1)
+    assert st1["state: previous-release chunk loads cleanly"] == "skipped"
+    cap = tmp_path / "r1" / "virgin_state.chunk"
+    assert cap.exists() and "<JS " in cap.read_text()
+    shutil.copy2(cap, tmp_path / "Ser_Good.jsfx.prevchunk")
+    rs2 = run_jsfx_battery(subj, out_dir=tmp_path / "r2",
+                           opts=JsfxTestOptions(signals=False,
+                                                sweep_params=False), log=_quiet)
+    st2 = _statuses(rs2)
+    assert st2["state: previous-release chunk loads cleanly"] == "passed", st2
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.negative_control
+def test_unstable_serialize_payload_is_red(tmp_path):
+    """Catalog item 3: a payload that differs between two back-to-back saves
+    (the deterministic proxy for an @serialize/audio race) must turn RED."""
+    rs = run_jsfx_battery(
+        JSFX / "ReaProof_Ser_BrokenRace.jsfx", out_dir=tmp_path,
+        opts=JsfxTestOptions(signals=False, sweep_params=False), log=_quiet)
+    ser = next(r for r in rs.results
+               if r.name == "state: repeated saves serialize identically")
+    assert ser.status == "failed"
+    assert "DIFFERENT payloads" in ser.message
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.negative_control
+def test_unguarded_truncation_restore_is_red(tmp_path):
+    """Catalog item 4: a restore loop that trusts a count from the stream
+    half-applies a truncated payload into a slider — the defaults check must
+    catch the garbage."""
+    rs = run_jsfx_battery(
+        JSFX / "ReaProof_Ser_BrokenTrunc.jsfx", out_dir=tmp_path,
+        opts=JsfxTestOptions(signals=False, sweep_params=False), log=_quiet)
+    tr = next(r for r in rs.results
+              if r.name == "state: truncated serialize data restores to defaults")
+    assert tr.status == "failed", tr.message
+    assert "file_avail" in tr.message or "wedged" in tr.message
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
 @pytest.mark.negative_control
 def test_state_leak_survives_readd_is_red(tmp_path):
     """Catalog item 7: state leaking through gmem into a fresh instance means

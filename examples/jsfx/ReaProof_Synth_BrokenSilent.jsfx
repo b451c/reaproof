@@ -1,0 +1,28 @@
+desc:ReaProof Synth BROKEN (silent for notes)
+// Deliberately-broken instrument: it consumes MIDI (midirecv loop runs) but
+// never raises its amplitude, so the reference note feed renders pure
+// silence. An instrument that stays silent for notes is broken - the
+// battery's "produces audio for the note feed" check must turn RED (the
+// sampler-without-assets escape hatch does NOT apply: no file sliders, no
+// filename resources).
+tags: instrument
+
+slider1:0.5<0,1,0.01>Level
+
+in_pin:none
+out_pin:left output
+out_pin:right output
+
+@init
+freq = 0; phase = 0; amp = 0;
+
+@block
+while (midirecv(ofs, msg1, msg2, msg3)) (
+  // notes received... and dropped on the floor: amp never changes
+  dropped += 1;
+);
+
+@sample
+phase += 2 * $pi * freq / srate;
+spl0 = sin(phase) * amp;
+spl1 = spl0;

@@ -62,7 +62,7 @@ from pathlib import Path
 
 from reaproof.observe.audio import analysis as A
 from reaproof.observe.audio import signals as S
-from reaproof.observe.audio.render import render_through_jsfx
+from reaproof.observe.audio.render import REFERENCE_NOTES, render_through_jsfx
 from reaproof.report.results import ResultSet, TestResult
 from reaproof.runner.autotest import (
     _emit, _mut_determinism, _mut_pathology, _staircase_env_lua,
@@ -264,6 +264,7 @@ class JsfxTestOptions:
     sample_rate: int = 48000                       # primary render SR
     extra_rates: tuple[int, ...] = (44100, 96000)  # catalog item 9
     signals: bool = True           # audio-integrity/multi-SR/determinism renders
+    signal_names: tuple[str, ...] | None = None    # subset of the signal set (None = all)
     sweep_params: bool = True
     max_params: int = 16
     full: bool = False
@@ -317,12 +318,18 @@ return out
 _JS_BLOCK = r"""
 local tr = reaper.GetTrack(0,0)
 local _, chunk = reaper.GetTrackStateChunk(tr, '', false)
-return chunk:match('(<JS .-\n>)') or ''
+-- the FX state is TWO blocks: <JS ...> (slider values) plus the separate
+-- <JS_SER> block carrying the @serialize payload (live-verified 7.75) — a
+-- serialize-only leak is invisible without the second one
+local js = chunk:match('(<JS .-\n>)') or ''
+local ser = chunk:match('(<JS_SER.-\n%s*>)') or ''
+return js .. ser
 """
 
 
 def _stage_compile_and_params(subject: Path, source: JsfxSource, add,
-                              *, log, jsfx_install=None) -> list[dict] | None:
+                              *, log, jsfx_install=None,
+                              out_dir: Path | None = None) -> list[dict] | None:
     """Compile proof + declared-vs-live param diff + factory-reset check.
 
     Returns the LIVE param list (dicts) on success, None when the subject
@@ -348,7 +355,8 @@ def _stage_compile_and_params(subject: Path, source: JsfxSource, add,
                 message="compile proof reads the FX window via js_ReaScriptAPI "
                         "— not present in this profile; install it to cover "
                         "compilation")
-            return _params_and_reset_stages(s, source, add, fx_add, live_params)
+            return _params_and_reset_stages(s, source, add, fx_add, live_params,
+                                            subject=subject, out_dir=out_dir)
         statics: list[str] = []
         floating = False
         deadline = time.monotonic() + 10.0
@@ -385,12 +393,14 @@ def _stage_compile_and_params(subject: Path, source: JsfxSource, add,
                      if desc_shown else
                      "no compiler error in the FX window (file declares no desc)"))
         s.eval("reaper.TrackFX_Show(reaper.GetTrack(0,0), 0, 2); return true")
-        return _params_and_reset_stages(s, source, add, fx_add, live_params)
+        return _params_and_reset_stages(s, source, add, fx_add, live_params,
+                                        subject=subject, out_dir=out_dir)
 
 
 def _params_and_reset_stages(s: ReaperSession, source: JsfxSource, add,
-                             fx_add: str, live_params: list[dict]
-                             ) -> list[dict] | None:
+                             fx_add: str, live_params: list[dict], *,
+                             subject: Path | None = None,
+                             out_dir: Path | None = None) -> list[dict] | None:
     """Declared-vs-live param diff + factory-reset check (no js_ReaScriptAPI
     needed — shared by the compile-pass and compile-skip paths)."""
     # -- declared-vs-live param diff (validates the sweep mapping) ------------
@@ -474,7 +484,154 @@ def _params_and_reset_stages(s: ReaperSession, source: JsfxSource, add,
             message="state survived remove + re-add — leaking through "
                     f"gmem/files/serialize{gmem_note}. "
                     f"virgin={virgin!r:.120} re-added={str(readd)!r:.120}")
+
+    if out_dir and virgin:
+        # seed for the previous-release check (catalog item 5): ship this
+        # file as <subject>.jsfx.prevchunk with the NEXT release and the
+        # battery will prove old state still loads cleanly
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "virgin_state.chunk").write_text(virgin, encoding="utf-8")
+
+    if "serialize" in source.sections:
+        _stage_serialize(s, source, add)
+        if subject is not None:
+            _stage_prev_chunk(s, subject, source, add)
     return live_params
+
+
+def _stage_prev_chunk(s: ReaperSession, subject: Path, source: JsfxSource,
+                      add) -> None:
+    """Catalog item 5 (opt-in): load the PREVIOUS release's captured state
+    block into the current build — old projects must keep loading cleanly
+    when the serialize format grows fields (version markers!)."""
+    prev = subject.with_name(subject.name + ".prevchunk")
+    if not prev.exists():
+        add("state: previous-release chunk loads cleanly", "skipped",
+            message=f"no {prev.name} captured — copy a release's "
+                    "virgin_state.chunk (battery artifact) next to the "
+                    "subject to cover serialize-format compatibility")
+        return
+    block = prev.read_text(encoding="utf-8", errors="replace").strip()
+    full = s.eval(r"""
+    local tr = reaper.GetTrack(0,0)
+    local _, chunk = reaper.GetTrackStateChunk(tr, '', false)
+    return chunk
+    """, timeout=30)
+    import re as _re
+    m = _re.search(r"<JS .*?\n\s*>(\s*\n\s*<JS_SER.*?\n\s*>)?", full or "", _re.S)
+    if not m:
+        add("state: previous-release chunk loads cleanly", "failed",
+            message="could not locate the FX state block in the live chunk")
+        return
+    patched = full[:m.start()] + block + full[m.end():]
+    try:
+        res = s.eval(
+            "local tr = reaper.GetTrack(0,0)\n"
+            "reaper.SetTrackStateChunk(tr, [==[" + patched + "]==], false)\n"
+            "local t0 = reaper.time_precise()\n"
+            "while reaper.time_precise() - t0 < 1.0 do end\n"
+            "return reaper.TrackFX_GetNumParams(tr, 0)",
+            timeout=30, hang_timeout=20)
+    except Exception as e:  # noqa: BLE001 — a hung load IS the failure mode
+        add("state: previous-release chunk loads cleanly", "failed",
+            message=f"loading the previous release's state wedged the engine: "
+                    f"{str(e)[:160]}")
+        return
+    if res == len(source.sliders) + len(WRAPPER_PARAMS):
+        add("state: previous-release chunk loads cleanly", "passed",
+            mutation_verified=False,
+            message=f"{prev.name} loaded; FX intact (a wedge or a dead FX "
+                    "would have failed — value-level compatibility needs a "
+                    "spec)")
+    else:
+        add("state: previous-release chunk loads cleanly", "failed",
+            message=f"FX not intact after loading {prev.name} "
+                    f"(nparams={res})")
+
+
+def _stage_serialize(s: ReaperSession, source: JsfxSource, add) -> None:
+    """Catalog items 3-4: repeated saves must serialize identically (a diff
+    means the payload depends on volatile/racing state), and a TRUNCATED
+    payload must restore to defaults — not garbage, not a hang. The payload
+    lives in the chunk's ``<JS_SER>`` base64 block (live-verified; @serialize
+    runs on every chunk get/set)."""
+    import base64
+    import re as _re
+    # item 3: save twice with nothing changed, byte-diff the payloads --------
+    c1 = s.eval(_JS_BLOCK, timeout=30)
+    c2 = s.eval(_JS_BLOCK, timeout=30)
+    s1 = (_re.search(r"<JS_SER(.*?)>", c1 or "", _re.S) or [None, ""])[1]
+    s2 = (_re.search(r"<JS_SER(.*?)>", c2 or "", _re.S) or [None, ""])[1]
+    if not s1.strip():
+        add("state: repeated saves serialize identically", "skipped",
+            message="@serialize produced no payload to compare")
+        return
+    if s1 == s2:
+        add("state: repeated saves serialize identically", "passed",
+            message=f"{len(s1.strip())} base64 chars, byte-identical twice")
+    else:
+        add("state: repeated saves serialize identically", "failed",
+            message="two back-to-back saves serialized DIFFERENT payloads — "
+                    "the serialize format depends on volatile state (audio-"
+                    "thread race / counters), so saved projects are lottery "
+                    f"tickets. save1={s1.strip()[:60]!r} save2={s2.strip()[:60]!r}")
+        return
+
+    # item 4: truncate the payload mid-stream, restore, demand defaults ------
+    full = s.eval(r"""
+    local tr = reaper.GetTrack(0,0)
+    local _, chunk = reaper.GetTrackStateChunk(tr, '', false)
+    return chunk
+    """, timeout=30)
+    m = _re.search(r"(<JS_SER\s*\n)(.*?)(\n\s*>)", full or "", _re.S)
+    if not m:
+        add("state: truncated serialize data restores to defaults", "skipped",
+            message="no <JS_SER> block in the live chunk to corrupt")
+        return
+    payload = base64.b64decode("".join(m.group(2).split()))
+    # drop exactly the LAST 32-bit field: every earlier field still reads
+    # cleanly, which is the truncation shape that exposes an unguarded
+    # count-then-read loop (a mid-field cut just reads as 0 and hides)
+    cut_len = len(payload) - 4 if len(payload) > 4 else 0
+    cut = base64.b64encode(payload[:cut_len]).decode()
+    corrupted = full[:m.start(2)] + cut + full[m.end(2):]
+    defaults_line = s.eval(
+        "local tr = reaper.GetTrack(0,0)\n"
+        "local _, c = reaper.GetTrackStateChunk(tr, '', false)\n"
+        "return c:match('<JS [^\\n]*\\n([^\\n]*)')", timeout=30)
+    try:
+        res = s.eval(
+            "local tr = reaper.GetTrack(0,0)\n"
+            "reaper.SetTrackStateChunk(tr, [==[" + corrupted + "]==], false)\n"
+            "local t0 = reaper.time_precise()\n"
+            "while reaper.time_precise() - t0 < 1.0 do end\n"
+            "local n = reaper.TrackFX_GetNumParams(tr, 0)\n"
+            "local _, c = reaper.GetTrackStateChunk(tr, '', false)\n"
+            "return { nparams = n, line = c:match('<JS [^\\n]*\\n([^\\n]*)') }",
+            timeout=30, hang_timeout=20)
+    except Exception as e:  # noqa: BLE001 — a hung restore IS the failure mode
+        add("state: truncated serialize data restores to defaults", "failed",
+            message=f"restore of a truncated payload wedged the engine: "
+                    f"{str(e)[:160]}")
+        return
+    nparams = (res or {}).get("nparams", 0)
+    line = (res or {}).get("line")
+    if nparams != len(source.sliders) + len(WRAPPER_PARAMS):
+        add("state: truncated serialize data restores to defaults", "failed",
+            message=f"FX no longer intact after truncated restore "
+                    f"(nparams={nparams})")
+    elif line == defaults_line:
+        add("state: truncated serialize data restores to defaults", "passed",
+            mutation_verified=True,
+            message="payload cut mid-stream; FX intact, sliders at defaults")
+    else:
+        add("state: truncated serialize data restores to defaults", "failed",
+            mutation_verified=True,
+            message="half-read state applied as if valid (sliders "
+                    f"{line!r:.80} vs defaults {defaults_line!r:.80}) — "
+                    "guard the read loop with file_avail() and a version "
+                    "marker")
 
 
 def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
@@ -527,19 +684,13 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
     # 2) compile proof + param diff + factory reset (one session) -------------
     log("compile proof + param mapping + factory reset…")
     live_params = _stage_compile_and_params(subject, source, add, log=log,
-                                            jsfx_install=jsfx_install)
+                                            jsfx_install=jsfx_install,
+                                            out_dir=out_dir)
     if live_params is None:
         _emit(rs, out_dir, subject)
         return rs
 
     # 3) render battery -------------------------------------------------------
-    if source.uses_midi and not source.writes_audio:
-        add("audio: render battery", "skipped",
-            message="MIDI-driven JSFX (midirecv/midisend, no spl writes) — "
-                    "the audio battery needs a MIDI feed (v2)")
-        rs.results[0].duration_s = time.monotonic() - t0
-        _emit(rs, out_dir, subject)
-        return rs
     if source.out_pin_none:
         add("audio: render battery", "skipped",
             message="out_pin:none — the FX declares no audio output, so there "
@@ -549,6 +700,8 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         return rs
     is_inst = opts.is_instrument or source.is_instrument or source.in_pin_none
     channels = max(2, min(64, source.out_pins or 2))
+    note_driven = source.uses_midi or is_inst
+    feed = REFERENCE_NOTES if note_driven else None
 
     fx_name = f"JS:ReaProof/{subject.name}"
     sr = opts.sample_rate
@@ -560,6 +713,8 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         "sweep": S.sweep(20.0, 20000.0, dbfs=-12.0, seconds=1.0, sr=sr),
         "fullscale_sine": S.sine(1000.0, dbfs=0.0, seconds=1.0, sr=sr),
     }
+    if opts.signal_names is not None:
+        sigs = {k: v for k, v in sigs.items() if k in opts.signal_names}
     renders = {}
     if opts.signals:
         log(f"audio integrity at {sr} Hz…")
@@ -614,6 +769,66 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
             _mut_pathology(r.samples, sname == "noise",
                            f"audio: {sname}@{xsr}Hz is pathology-free", add)
 
+    # MIDI feed (instrument/note-driven subjects) -----------------------------
+    if note_driven and opts.signals:
+        log("reference note feed…")
+        feed_sig = S.silence(1.2, sr=sr)
+        midi_r = None
+        try:
+            midi_r = render_through_jsfx(fx_name, jsfx_files=jsfx_install,
+                                         input_signal=feed_sig, sample_rate=sr,
+                                         channels=channels, midi_notes=feed,
+                                         name=f"jt-{subject.stem}-midi",
+                                         render_timeout=opts.render_timeout)
+        except Exception as e:  # noqa: BLE001
+            add("midi: renders under the reference note feed", "failed",
+                message=str(e)[:200])
+        if midi_r is not None:
+            if midi_r.samples.shape[0] < len(feed_sig):
+                add("midi: renders under the reference note feed", "failed",
+                    message=f"render truncated: {midi_r.samples.shape[0]}/"
+                            f"{len(feed_sig)} samples")
+                midi_r = None
+            else:
+                # hard pathologies only: note onsets are legitimate fast
+                # transients, so the click detector must not judge them
+                _mut_pathology(midi_r.samples, True,
+                               "midi: renders under the reference note feed", add)
+        if midi_r is not None:
+            needs_assets = (any(d.is_file for d in source.sliders)
+                            or bool(source.filenames))
+            rms = A.rms_dbfs(midi_r.samples)
+            if not source.writes_audio:
+                add("midi: produces audio for the note feed", "skipped",
+                    message="subject writes no audio (MIDI processor) — "
+                            "nothing to hear by design")
+            elif needs_assets and rms <= -80.0:
+                add("midi: produces audio for the note feed", "skipped",
+                    message="silent, and the subject declares file sliders / "
+                            "filename resources — a sampler without its "
+                            "assets is not provably broken (load assets and "
+                            "author a spec to cover this)")
+            elif rms > -80.0:
+                add("midi: produces audio for the note feed", "passed",
+                    message=f"{rms:.1f} dBFS for the reference notes")
+            else:
+                add("midi: produces audio for the note feed", "failed",
+                    message=f"note feed produced {rms:.1f} dBFS — an "
+                            "instrument that stays silent for notes is broken")
+            if rms > -80.0:
+                try:
+                    again = render_through_jsfx(
+                        fx_name, jsfx_files=jsfx_install, input_signal=feed_sig,
+                        sample_rate=sr, channels=channels, midi_notes=feed,
+                        name=f"jt-{subject.stem}-mididet",
+                        render_timeout=opts.render_timeout)
+                    _mut_determinism(midi_r.samples, again.samples,
+                                     "midi: note-feed re-render is bit-identical",
+                                     add)
+                except Exception as e:  # noqa: BLE001
+                    add("midi: note-feed re-render is bit-identical", "failed",
+                        message=str(e)[:200])
+
     # determinism -------------------------------------------------------------
     if "sine_1k" in renders:
         if source.uses_midi and A.rms_dbfs(renders["sine_1k"].samples) < -110.0:
@@ -621,8 +836,8 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
             # determinism mutation cannot register on it (vacuous), and that
             # is a missing feed, not a subject defect
             add("determinism: re-render is bit-identical", "skipped",
-                message="output silent without a MIDI feed — unprovable here "
-                        "(MIDI-feed renders are the v2 slice)")
+                message="output silent without notes — determinism is proven "
+                        "by the note-feed re-render instead")
         else:
             log("determinism…")
             try:
@@ -662,6 +877,7 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
                 r = render_through_jsfx(fx_name, jsfx_files=jsfx_install,
                                         input_signal=noise, sample_rate=sr,
                                         channels=channels, extra_setup=env,
+                                        midi_notes=feed,
                                         name=f"jt-{subject.stem}-sweep{idx}",
                                         render_timeout=opts.render_timeout)
             except Exception as e:  # noqa: BLE001

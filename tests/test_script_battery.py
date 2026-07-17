@@ -104,6 +104,27 @@ def test_state_leaks_are_named_and_declarable(tmp_path):
 
 @pytest.mark.reaper
 @pytest.mark.slow
+@pytest.mark.negative_control
+def test_gmem_leak_is_named_and_declarable(tmp_path):
+    """Catalog item 8 / forum ask (b): gmem is invisible to every other
+    census — the differ watches the namespaces the script attaches and names
+    the leaked slots; the same subject with the write DECLARED passes."""
+    rs = run_script_battery(SCRIPTS / "rp_gmem_leaky.lua",
+                            out_dir=tmp_path / "undeclared", log=_quiet)
+    leak = next(r for r in rs.results
+                if r.name == "hygiene: no undeclared state leaks")
+    assert leak.status == "failed"
+    assert "gmem 'RPGmemLeak'" in leak.message and "[3]" in leak.message
+
+    rs2 = run_script_battery(
+        SCRIPTS / "rp_gmem_leaky.lua", out_dir=tmp_path / "declared",
+        opts=ScriptTestOptions(expect_gmem_change=True), log=_quiet)
+    st2 = _statuses(rs2)
+    assert st2["hygiene: no undeclared state leaks"] == "passed"
+
+
+@pytest.mark.reaper
+@pytest.mark.slow
 @pytest.mark.gate
 def test_ui_subject_window_is_checked(tmp_path):
     rs = run_script_battery(SCRIPTS / "rp_ui.lua", out_dir=tmp_path,

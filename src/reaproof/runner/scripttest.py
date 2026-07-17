@@ -47,7 +47,12 @@ class ScriptTestOptions:
     ui: bool = False                     # a window is EXPECTED to appear
     expect_project_change: bool = False  # script legitimately edits the project
     expect_extstate_change: bool = False  # script legitimately persists state
+    expect_gmem_change: bool = False     # script legitimately writes shared gmem
     settle: float = 2.5                  # deferred-phase supervision window (s)
+
+
+#: gmem namespaces a script binds to — the hygiene differ watches exactly these
+_GMEM_ATTACH = re.compile(r"gmem_attach\(\s*['\"]([\w.-]+)")
 
 
 def _add(rs: ResultSet, log, name: str, status: str, **kw) -> None:
@@ -119,8 +124,12 @@ def _stage_header(script: Path, rs: ResultSet, log) -> None:
 
 def _stage_load_and_hygiene(script: Path, opts: ScriptTestOptions,
                             rs: ResultSet, log, art: Path | None) -> None:
+    # gmem is invisible to project/ExtState/window censuses — watch every
+    # namespace the script binds to (catalog item 8 / forum ask (b))
+    gmem_ns = sorted(set(_GMEM_ATTACH.findall(
+        script.read_text(encoding="utf-8", errors="replace"))))
     with ReaperSession(f"scripttest-{script.stem}") as s:
-        before = hygiene.snapshot(s)
+        before = hygiene.snapshot(s, gmem_namespaces=gmem_ns)
         with DialogMonitor(s.handle.pid,
                            evidence_dir=(art / "dialogs") if art else None) as mon:
             res = s.eval(
@@ -153,7 +162,7 @@ def _stage_load_and_hygiene(script: Path, opts: ScriptTestOptions,
                 return
             _add(rs, log, "defer: no runtime error in deferred phase", "passed")
 
-            after = hygiene.snapshot(s)
+            after = hygiene.snapshot(s, gmem_namespaces=gmem_ns)
 
         if opts.ui:
             new_windows = after.windows - before.windows
@@ -164,12 +173,14 @@ def _stage_load_and_hygiene(script: Path, opts: ScriptTestOptions,
                 _add(rs, log, "ui: window appeared", "failed",
                      message="--ui declared but no new window is on screen")
             after = hygiene.HygieneSnapshot(     # expected window ≠ a leak
-                data=after.data, windows=before.windows, extstate=after.extstate)
+                data=after.data, windows=before.windows,
+                extstate=after.extstate, gmem=after.gmem)
 
         findings = hygiene.diff(
             before, after,
             expect_project_change=opts.expect_project_change,
-            expect_extstate_change=opts.expect_extstate_change)
+            expect_extstate_change=opts.expect_extstate_change,
+            expect_gmem_change=opts.expect_gmem_change)
         if findings:
             _add(rs, log, "hygiene: no undeclared state leaks", "failed",
                  message="; ".join(findings)[:280])

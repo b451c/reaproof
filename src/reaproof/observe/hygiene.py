@@ -48,14 +48,40 @@ class HygieneSnapshot:
     data: dict[str, Any]
     windows: frozenset[str]           # titles of REAPER-owned on-screen windows
     extstate: bytes                   # reaper-extstate.ini bytes ("" if absent)
+    gmem: dict[str, dict[int, float]] = field(default_factory=dict)
 
 
-def snapshot(session) -> HygieneSnapshot:
+#: slots read per gmem namespace — gmem is huge (8M values); the first block
+#: is where real-world indices live, and the differ needs a bounded, cheap read
+GMEM_SCAN_SLOTS = 4096
+
+_GMEM_LUA = """
+return (function()
+  reaper.gmem_attach('__NS__')
+  local nz = {}
+  for i = 0, __N__ - 1 do
+    local v = reaper.gmem_read(i)
+    if v ~= 0 then nz[tostring(i)] = v end
+  end
+  return nz
+end)()
+"""
+
+
+def snapshot(session, *, gmem_namespaces=()) -> HygieneSnapshot:
     data = session.eval(_SNAPSHOT_LUA)
     ini = session.profile.resource_dir / "reaper-extstate.ini"
     ext = ini.read_bytes() if ini.exists() else b""
+    gmem: dict[str, dict[int, float]] = {}
+    for ns in gmem_namespaces:
+        # the bridge's attachment also keeps the namespace ALIVE across the
+        # subject's exit — gmem is freed with its last user (live-verified),
+        # so without an attached observer the leak would never be witnessed
+        raw = session.eval(
+            _GMEM_LUA.replace("__NS__", ns).replace("__N__", str(GMEM_SCAN_SLOTS)))
+        gmem[ns] = {int(k): float(v) for k, v in (raw or {}).items()}
     return HygieneSnapshot(data=data or {}, windows=_window_titles(session),
-                           extstate=ext)
+                           extstate=ext, gmem=gmem)
 
 
 def _window_titles(session) -> frozenset[str]:
@@ -73,8 +99,21 @@ def _window_titles(session) -> frozenset[str]:
 
 def diff(before: HygieneSnapshot, after: HygieneSnapshot, *,
          expect_project_change: bool = False,
-         expect_extstate_change: bool = False) -> list[str]:
+         expect_extstate_change: bool = False,
+         expect_gmem_change: bool = False) -> list[str]:
     """Named findings for every UNDECLARED difference. Empty list == clean."""
+    gf: list[str] = []
+    if not expect_gmem_change:
+        for ns in sorted(set(before.gmem) | set(after.gmem)):
+            b_ns, a_ns = before.gmem.get(ns, {}), after.gmem.get(ns, {})
+            changed = [i for i in sorted(set(b_ns) | set(a_ns))
+                       if b_ns.get(i, 0.0) != a_ns.get(i, 0.0)]
+            if changed:
+                head = ", ".join(
+                    f"[{i}] {b_ns.get(i, 0.0):g} -> {a_ns.get(i, 0.0):g}"
+                    for i in changed[:4])
+                gf.append(f"gmem '{ns}' changed at {len(changed)} slot(s): {head}"
+                          " (session-shared memory left behind)")
     f: list[str] = []
     b, a = before.data, after.data
     if not expect_project_change:
@@ -101,4 +140,4 @@ def diff(before: HygieneSnapshot, after: HygieneSnapshot, *,
     leaked = after.windows - before.windows
     if leaked:
         f.append(f"window(s) left open: {sorted(t for t in leaked if t)}")
-    return f
+    return f + gf

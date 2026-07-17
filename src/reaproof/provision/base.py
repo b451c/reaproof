@@ -342,6 +342,10 @@ def get_provisioner() -> Provisioner:
         from reaproof.provision.linux import LinuxProvisioner
 
         return LinuxProvisioner()   # CI-verified (Xvfb); see provision/linux.py
+    if sysname == "Windows":
+        from reaproof.provision.windows import WindowsProvisioner
+
+        return WindowsProvisioner()  # first live spike on the VM; see the module
     raise NotImplementedError(
         f"provisioner for {sysname} not implemented (Windows is the remaining target)"
     )

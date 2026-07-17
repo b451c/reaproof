@@ -115,6 +115,7 @@ def cmd_test(args) -> int:
             ui=args.ui,
             expect_project_change=args.expect_modifies_project,
             expect_extstate_change=args.expect_extstate,
+            expect_gmem_change=args.expect_gmem,
         ))
         return _print_verdict(rs, out)
     if subject.suffix.lower() == ".dylib":
@@ -288,6 +289,10 @@ def main(argv=None) -> int:
                     help="script: project edits are declared/expected")
     sp.add_argument("--expect-extstate", action="store_true",
                     help="script: persistent ExtState writes are declared/expected")
+    sp.add_argument("--expect-gmem", action="store_true",
+                    help="script: writes to its attached gmem namespace(s) are "
+                         "declared/expected (the differ watches every "
+                         "gmem_attach'd namespace)")
     sp.add_argument("--run-actions", action="store_true",
                     help="extension: RUN each registered action under supervision "
                          "(opt-in — actions can be destructive/interactive)")

@@ -105,7 +105,17 @@ local function atomic_write(path, data)
   local wok = f:write(data)
   local cok = f:close()
   if not wok or cok == false then os.remove(tmp); return false end
-  return os.rename(tmp, path)
+  -- Windows: rename-over-open-file fails while a concurrent READER holds the
+  -- target (no FILE_SHARE_DELETE) — the client polling heartbeat.json is
+  -- exactly such a reader. One transient refusal must not drop a beat:
+  -- os.remove-then-rename with a couple of retries (verified requirement on
+  -- the Windows leg; a no-op on POSIX where the first rename always wins).
+  if os.rename(tmp, path) then return true end
+  for _ = 1, 20 do
+    os.remove(path)
+    if os.rename(tmp, path) then return true end
+  end
+  return false
 end
 
 -- ---- command servicing -----------------------------------------------------
