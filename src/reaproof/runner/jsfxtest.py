@@ -446,8 +446,17 @@ def _params_and_reset_stages(s: ReaperSession, source: JsfxSource, add,
                      f"'{source.gmem_namespace}' to emulate a concurrent "
                      "instance)")
     virgin = s.eval(_JS_BLOCK, timeout=30)
+
+    def _tweak(d: SliderDecl) -> float:
+        # the endpoint FURTHEST from the default: a mid-range value can round
+        # back onto the default on stepped/boolean sliders, which would trip
+        # the vacuous-oracle guard on a perfectly good subject
+        if d.default is None:
+            return d.lo
+        return d.lo if abs(d.default - d.lo) >= abs(d.default - d.hi) else d.hi
+
     tweaks = "\n".join(
-        f"reaper.TrackFX_SetParam(tr, 0, {i}, {d.lo + (d.hi - d.lo) * 0.73:.6f})"
+        f"reaper.TrackFX_SetParam(tr, 0, {i}, {_tweak(d):.6f})"
         for i, d in sweepable)
     s.eval("local tr = reaper.GetTrack(0,0)\n" + tweaks + "\nreturn true",
            timeout=30)

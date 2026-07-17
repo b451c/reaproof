@@ -87,10 +87,11 @@ def _reap_render(ini: Path) -> None:
     """Kill the straggler render process bound to our unique cfgfile."""
     import sys
     if sys.platform == "win32":
+        safe = str(ini).replace("'", "''")
         subprocess.run(
             ["powershell", "-NoProfile", "-Command",
              "Get-CimInstance Win32_Process -Filter \"Name='reaper.exe'\" | "
-             f"Where-Object {{ $_.CommandLine -like '*{str(ini)}*' }} | "
+             f"Where-Object {{ $_.CommandLine -like '*{safe}*' }} | "
              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
             capture_output=True, timeout=30)
     else:

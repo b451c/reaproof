@@ -99,7 +99,11 @@ def run_au_battery(component: Path, out_dir: Path | None = None,
     # 2) registration (semi-hermetic by nature — named, never silent) --------
     target_probe = next((e for e in entries if e["type"] in _INSERTABLE),
                         entries[0])
-    first_ok, _ = _auval(target_probe)
+    try:
+        first_ok, _ = _auval(target_probe)
+    except subprocess.TimeoutExpired:
+        # a wedged probe is a finding, not a crash of the battery
+        first_ok = False
     scanned_roots = ("/System/Library/Components",
                      "/Library/Audio/Plug-Ins/Components",
                      str(Path.home() / "Library/Audio/Plug-Ins/Components"))
