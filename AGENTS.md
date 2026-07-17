@@ -14,6 +14,10 @@ verification). Entry points are plain CLI:
 ```
 reaproof author <subject> --mode auto|interactive   # scaffold the manifest
 reaproof test <subject>                             # zero-code battery first
+reaproof test <subject> --quick                     # structural stages, ~10 s -
+                                                    # use in your edit loop; run
+                                                    # the FULL battery before any
+                                                    # done/green claim
 reaproof features-report <manifest> --tests <dir>   # anti-fabrication check
 ```
 
