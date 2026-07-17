@@ -45,16 +45,24 @@ def _offline_render(rpp: Path, ini: Path, out: Path, *, timeout: float = 120.0,
 
     ``clap_path`` (when given) is exported as ``CLAP_PATH`` so the separate render
     process discovers the controlled subject CLAP exactly as the bridge launch did.
+    macOS goes through ``open -n`` (app bundle); Linux execs the pinned binary
+    directly (live-verified on the Linux leg).
     """
+    import sys
     if out.exists():
         out.unlink()
     log = rpp.with_suffix(".renderlog.txt")
     extra = {"CLAP_PATH": str(clap_path)} if clap_path else None
-    subprocess.run(
-        ["open", "-n", str(paths.REAPER_APP), "--args", "-renderproject", str(rpp),
-         "-nosplash", "-ignoreerrors", "-splashlog", str(log), "-cfgfile", str(ini)],
-        check=True, env=subprocess_env(extra), timeout=30,
-    )
+    args = ["-renderproject", str(rpp), "-nosplash", "-ignoreerrors",
+            "-splashlog", str(log), "-cfgfile", str(ini)]
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-n", str(paths.REAPER_APP), "--args", *args],
+                       check=True, env=subprocess_env(extra), timeout=30)
+    else:
+        from reaproof.provision.linux import REAPER_BIN_LINUX
+        subprocess.Popen([str(REAPER_BIN_LINUX), *args],
+                         env=subprocess_env(extra),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     deadline = time.monotonic() + timeout
     try:
         while time.monotonic() < deadline:
@@ -103,6 +111,13 @@ def render_through_jsfx(
     set_params = "\n".join(
         f"reaper.TrackFX_SetParam(tr, fx, {idx}, {val})" for idx, val in params.items()
     )
+    # track + master must carry the channel count or spl2+ have nowhere to go
+    # (both default to stereo; REAPER only accepts even counts)
+    nch = channels + (channels % 2)
+    set_nchan = (
+        f"reaper.SetMediaTrackInfo_Value(tr, 'I_NCHAN', {nch})\n"
+        f"reaper.SetMediaTrackInfo_Value(reaper.GetMasterTrack(0), 'I_NCHAN', {nch})"
+    ) if channels > 2 else ""
     built = s.eval(f"""
     while reaper.CountTracks(0) > 0 do reaper.DeleteTrack(reaper.GetTrack(0,0)) end
     reaper.InsertTrackAtIndex(0, false)
@@ -110,6 +125,7 @@ def render_through_jsfx(
     reaper.SetOnlyTrackSelected(tr)
     reaper.SetEditCurPos(0, false, false)
     reaper.InsertMedia([[{inp}]], 0)
+    {set_nchan}
     local fx = reaper.TrackFX_AddByName(tr, '{fx_name}', false, -1)
     if fx < 0 then return {{err='fx not found: {fx_name}'}} end
     {set_params}
@@ -139,7 +155,8 @@ def render_through_jsfx(
         "lock": lock.as_dict(),
         "input_sha256": sha256_file(inp),
         "output_sha256": sha256_file(out),
-        "jsfx": [Path(j).name for j in jsfx_files],
+        "jsfx": [j[1] if isinstance(j, tuple) else Path(j).name
+                 for j in jsfx_files],
         "rpp": str(rpp),
         "output_path": str(out),
     }

@@ -15,11 +15,14 @@ import pytest
 
 from reaproof import paths
 from reaproof.runner.jsfxtest import (
-    _ERROR_TEXT, JsfxTestOptions, parse_jsfx, run_jsfx_battery,
+    _ERROR_TEXT, JsfxTestOptions, collect_dependencies, parse_jsfx,
+    run_jsfx_battery,
 )
 
-pytestmark = pytest.mark.skipif(sys.platform != "darwin",
-                                reason="JSFX battery uses the macOS session stack")
+# REAPER-launching gates need the macOS session stack; the parser units and
+# the static-only battery paths are platform-independent and run everywhere
+darwin = pytest.mark.skipif(sys.platform != "darwin",
+                            reason="JSFX battery gates use the macOS session stack")
 
 JSFX = paths.EXAMPLES / "jsfx"
 
@@ -79,6 +82,72 @@ def test_parser_variants_file_enum_gmem_nodesc_comments():
     assert not src.writes_audio and src.gfx_functions == []
 
 
+def test_parser_tags_pins_shape_and_midi_variants():
+    text = (
+        "desc:Widest header\n"
+        "tags: synthesis Instrument mono\n"
+        "slider1:5<0,10,0.1:log>Log freq\n"
+        "in_pin:none\n"
+        "out_pin:main L\nout_pin:main R\nout_pin:aux L\nout_pin:aux R\n"
+        "@block\nmidisyx(ofs, #buf);\n")
+    src = parse_jsfx(text)
+    assert src.tags == ["synthesis", "instrument", "mono"]
+    assert src.is_instrument            # official v6.74+ signal, case-folded
+    s = src.sliders[0]
+    assert (s.lo, s.hi) == (0.0, 10.0)  # the :log shape rides the inc field
+    assert src.in_pin_none and src.in_pins == 0
+    assert src.out_pins == 4 and not src.out_pin_none
+    assert src.uses_midi                # midisyx counts, not only recv/send
+
+
+def test_parser_imports_and_filenames():
+    src = parse_jsfx((JSFX / "ReaProof_Gain_Imports.jsfx").read_text())
+    assert src.imports == ["lib/ReaProof_DSP_Lib.jsfx-inc"]
+    text = "desc:x\nfilename:0,data/ir.wav\nfilename:1,skin.png\n@sample\nx=1;\n"
+    assert parse_jsfx(text).filenames == ["data/ir.wav", "skin.png"]
+
+
+def test_collect_dependencies_resolves_nested_and_guards_escape(tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "fx.jsfx").write_text(
+        "desc:t\nimport lib/a.jsfx-inc\nfilename:0,data.bin\n@sample\nx=1;\n")
+    (tmp_path / "lib" / "a.jsfx-inc").write_text(
+        "import b.jsfx-inc\nimport ../../escape.jsfx-inc\n@init\nfunction f() (1);\n")
+    (tmp_path / "lib" / "b.jsfx-inc").write_text("@init\nfunction g() (2);\n")
+    (tmp_path / "data.bin").write_bytes(b"\x00")
+    deps, missing = collect_dependencies(tmp_path / "fx.jsfx")
+    rels = sorted(r for _, r in deps)
+    # nested import resolves RELATIVE TO THE IMPORTING FILE (lib/), and the
+    # two-level ../.. escape is refused, not silently installed
+    assert rels == ["data.bin", "lib/a.jsfx-inc", "lib/b.jsfx-inc"]
+    assert missing == ["../../escape.jsfx-inc"]
+
+
+def test_collect_dependencies_names_missing_imports():
+    deps, missing = collect_dependencies(JSFX / "ReaProof_Gain_BrokenImport.jsfx")
+    assert deps == []
+    assert missing == ["lib/DoesNotExist.jsfx-inc"]
+
+
+def test_missing_import_is_a_named_static_failure(tmp_path):
+    """No REAPER needed: the battery stops at the static stage with the
+    missing reference NAMED — an import that cannot install cannot compile."""
+    rs = run_jsfx_battery(JSFX / "ReaProof_Gain_BrokenImport.jsfx",
+                          out_dir=tmp_path, log=_quiet)
+    assert not rs.gate_green
+    static = next(r for r in rs.results if r.name.startswith("static:"))
+    assert static.status == "failed"
+    assert "DoesNotExist" in static.message
+    assert len(rs.results) == 1         # nothing ran on top of the broken base
+
+
+def test_reapack_header_parses_jsfx_double_slash_comments():
+    from reaproof.runner.scripttest import parse_reapack_header
+    jsfx = "desc:My effect\n// @version 1.2.3\n// @author someone\nslider1:0<0,1,0.1>x\n"
+    hdr = parse_reapack_header(jsfx)
+    assert hdr and hdr["version"] == "1.2.3" and hdr["author"] == "someone"
+
+
 def test_error_regex_matches_real_compiler_messages():
     # both texts read verbatim from the FX window of broken subjects (7.75)
     assert _ERROR_TEXT.match("@sample:17: syntax error: missing ) or ]")
@@ -91,6 +160,7 @@ def test_error_regex_matches_real_compiler_messages():
 
 # ---- battery gates (REAPER) ---------------------------------------------------
 
+@darwin
 @pytest.mark.reaper
 @pytest.mark.slow
 @pytest.mark.gate
@@ -107,6 +177,7 @@ def test_clean_subject_is_green_twice(tmp_path):
         assert st["param sweep [0] Gain (dB): stable across range"] == "passed"
 
 
+@darwin
 @pytest.mark.reaper
 @pytest.mark.slow
 @pytest.mark.negative_control
@@ -125,6 +196,7 @@ def test_compile_broken_is_red_with_the_compiler_error(tmp_path):
     assert not any(r.name.startswith("audio:") for r in rs.results)
 
 
+@darwin
 @pytest.mark.reaper
 @pytest.mark.slow
 @pytest.mark.gate
@@ -142,6 +214,7 @@ def test_sparse_hidden_mapping_and_hidden_sweep(tmp_path):
     assert st["param sweep [2] Drive scale (hidden): stable across range"] == "passed"
 
 
+@darwin
 @pytest.mark.reaper
 @pytest.mark.slow
 @pytest.mark.negative_control
@@ -164,6 +237,52 @@ def test_runaway_loop_at_extreme_is_red_in_the_sweep(tmp_path):
         sweep.message
 
 
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.gate
+def test_import_subject_compiles_with_its_library(tmp_path):
+    """A JSFX shipped with a library must pass the compile proof — the battery
+    installs import references alongside, preserving the relative layout.
+    (Without dependency installation this exact subject fails compile with
+    'db2gain' undefined — the BrokenCompile fixture proves that red path.)"""
+    rs = run_jsfx_battery(
+        JSFX / "ReaProof_Gain_Imports.jsfx", out_dir=tmp_path,
+        opts=JsfxTestOptions(signals=False, sweep_params=False), log=_quiet)
+    st = _statuses(rs)
+    assert rs.gate_green, st
+    assert st["compile: REAPER inserts and compiles the JSFX"] == "passed"
+    static = next(r for r in rs.results if r.name.startswith("static:"))
+    assert "installs 1 referenced file" in static.message
+
+
+@darwin
+@pytest.mark.reaper
+@pytest.mark.slow
+@pytest.mark.gate
+def test_quad_split_renders_four_channels():
+    """Multichannel plumbing: a 4-out subject must reach channels 3/4 in the
+    render (track/master/output sized from the declared out_pin count), and
+    the duplicated pair must sit at exactly half amplitude."""
+    from reaproof.observe.audio import analysis as A
+    from reaproof.observe.audio import signals as S
+    from reaproof.observe.audio.render import render_through_jsfx
+    r = render_through_jsfx(
+        "JS:ReaProof/ReaProof_Quad_Split.jsfx",
+        jsfx_files=[JSFX / "ReaProof_Quad_Split.jsfx"],
+        input_signal=S.noise(dbfs=-12.0, seconds=0.5, sr=48000),
+        sample_rate=48000, channels=4, name="quadgate")
+    assert r.samples.shape[1] == 4, r.samples.shape
+    rms0 = A.rms_dbfs(r.samples[:, 0])
+    rms2 = A.rms_dbfs(r.samples[:, 2])
+    # a silent channel 3 would sit at -inf, not at -6 dB relative — the
+    # relation itself is the proof the upper channels carried audio
+    assert A.approx_dbfs(rms2, rms0 - 6.02, tol_db=0.2,
+                         why="out 3 duplicates out 1 at exactly half amplitude"), \
+        f"ch1={rms0:.2f} dBFS ch3={rms2:.2f} dBFS"
+
+
+@darwin
 @pytest.mark.reaper
 @pytest.mark.slow
 @pytest.mark.negative_control

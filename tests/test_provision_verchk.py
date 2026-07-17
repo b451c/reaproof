@@ -19,7 +19,10 @@ from reaproof.provision.base import get_provisioner
 
 
 def test_generated_ini_seeds_future_verchk_stamp():
-    prov = get_provisioner()
+    try:
+        prov = get_provisioner()
+    except NotImplementedError as e:   # no provisioner for this OS yet (Windows)
+        pytest.skip(str(e))
     profile = prov.assemble_profile("verchk-gate", DeterminismLock())
     ini = profile.ini_path.read_text()
     assert "[verchk]" in ini, "reaper.ini has no [verchk] section"

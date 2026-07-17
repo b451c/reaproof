@@ -1,0 +1,18 @@
+desc:ReaProof Quad Split (2 in, 4 out)
+// GOOD reference subject for multichannel plumbing: input L/R pass through on
+// outputs 1/2 and are duplicated at exactly half amplitude (-6.02 dB) on
+// outputs 3/4. The render pipeline must size the track, the master and the
+// output file to the declared out_pin count for channels 3/4 to exist at all.
+
+slider1:0<0,1,1>-unused
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+out_pin:left dup (half)
+out_pin:right dup (half)
+
+@sample
+spl2 = spl0 * 0.5;
+spl3 = spl1 * 0.5;

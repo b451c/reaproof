@@ -21,6 +21,12 @@ def _fixture_repo(tmp_path: Path) -> Path:
     shutil.copy2(SCRIPTS / "rp_good.lua", repo / "Category" / "rp_good.lua")
     shutil.copy2(SCRIPTS / "rp_error_load.lua",
                  repo / "Category" / "rp_error_load.lua")
+    # a JSFX package: the reference gain subject with a ReaPack header
+    # (JSFX headers use // comments after the desc: line)
+    gain = (paths.EXAMPLES / "jsfx" / "ReaProof_Gain.jsfx").read_text()
+    first, rest = gain.split("\n", 1)
+    (repo / "Category" / "rp_gain.jsfx").write_text(
+        f"{first}\n// @version 1.0\n// @author reaproof-fixture\n{rest}")
     # header-carrying file at the ROOT: ReaPack never indexes it
     shutil.copy2(SCRIPTS / "rp_good.lua", repo / "rp_rootfile.lua")
     # headerless helper: not a package at all
@@ -33,6 +39,7 @@ def test_discovery_applies_reapack_rules(tmp_path):
     packages, root_ignored = discover_packages(repo)
     names = [p.name for p in packages]
     assert "rp_good.lua" in names and "rp_error_load.lua" in names
+    assert "rp_gain.jsfx" in names              # JSFX packages are packages
     assert "helper.lua" not in names            # no header = not a package
     assert [f.name for f in root_ignored] == ["rp_rootfile.lua"]
 
@@ -49,6 +56,7 @@ def test_repo_battery_names_good_and_broken_packages(tmp_path):
     assert st["layout: packages must live in a category subdir"] == "failed"
     assert st["package Category/rp_good.lua"] == "passed"
     assert st["package Category/rp_error_load.lua"] == "failed"   # the mutation
+    assert st["package Category/rp_gain.jsfx"] == "passed"  # routed to the JSFX battery
     assert not rs.gate_green
 
 
@@ -61,4 +69,4 @@ def test_budget_cap_is_logged_never_silent(tmp_path):
                           log=lambda *_: None)
     caps = [r for r in rs.results if r.name == "budget: package cap"]
     assert caps and caps[0].status == "skipped"
-    assert "1/2" in caps[0].message
+    assert "1/3" in caps[0].message

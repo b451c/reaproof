@@ -76,15 +76,21 @@ def _stage_luacheck(script: Path, rs: ResultSet, log) -> None:
 
 # ---- stage 2: ReaPack header lint --------------------------------------------
 
-_TAG = re.compile(r"^\s*(?:--|/\*|@)?\s*@(\w+)\s*(.*)$")
+_TAG = re.compile(r"^\s*(?:--|//|/\*|@)?\s*@(\w+)\s*(.*)$")
 
 
 def parse_reapack_header(text: str) -> dict[str, str] | None:
-    """The leading-comment ReaPack header as {tag: value}, or None if absent."""
+    """The leading-comment ReaPack header as {tag: value}, or None if absent.
+
+    Comment prefixes cover the packaged languages: ``--`` (Lua/EEL),
+    ``//`` (JSFX/EEL2), ``/* */`` blocks. A JSFX package's header follows its
+    ``desc:`` line, so non-comment directive lines never terminate the scan
+    before the first tag is seen.
+    """
     tags: dict[str, str] = {}
     for line in text.splitlines()[:80]:
         stripped = line.strip()
-        if tags and not stripped.startswith(("--", "*", "@")) and stripped != "":
+        if tags and not stripped.startswith(("--", "//", "*", "@")) and stripped != "":
             break
         m = _TAG.match(line)
         if m:

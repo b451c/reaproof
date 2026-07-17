@@ -7,6 +7,21 @@ silent JSFX failure modes this battery turns into checks. v1 covers his items
 re-add factory reset, multi-samplerate renders); serialize/gmem/UI-race checks
 (items 2-5, 8) are the v2 slice.
 
+Beyond the catalog, the battery covers the full documented JSFX file surface
+(reaper.fm/sdk/js): every slider syntax (sparse numbers, hidden ``-`` labels,
+``variable=`` names, enum ``{a,b}`` lists, file sliders, shaped ``:log``/
+``:sqr`` ranges), ``tags:`` (an ``instrument`` tag auto-skips the
+silence→silence check), ``in_pin``/``out_pin`` declarations (the render runs
+at the declared output channel count; ``out_pin:none`` skips the audio
+battery honestly), ``options:`` keys, and — critically — ``import`` and
+``filename:`` references: the battery resolves them relative to the subject
+(recursively for imports) and installs them alongside, preserving the
+relative layout, because a JSFX shipped with libraries would otherwise fail
+its compile proof despite being perfectly fine in the user's install. A
+reference that cannot be resolved is a named static failure, never a silent
+one. ReaPack repositories route ``.jsfx`` packages here via
+``reaproof test-repo`` (structural stages).
+
 Verified mechanics this battery is built on (REAPER 7.75, live-probed):
 
 - A JSFX that FAILS TO COMPILE still inserts via ``TrackFX_AddByName`` and
@@ -39,6 +54,7 @@ Verified mechanics this battery is built on (REAPER 7.75, live-probed):
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -79,10 +95,22 @@ class JsfxSource:
     sliders: list[SliderDecl] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
     writes_audio: bool = False    # assigns to spl<N>/spl(...) in code
-    uses_midi: bool = False       # midirecv/midisend in code
+    uses_midi: bool = False       # midirecv/midisend/midisyx in code
     gmem_namespace: str | None = None
     gfx_functions: list[str] = field(default_factory=list)
     gfx_funcs_used_outside: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)      # tags: line (lowercased)
+    imports: list[str] = field(default_factory=list)   # import <path> directives
+    filenames: list[str] = field(default_factory=list)  # filename:N,<path> refs
+    in_pins: int = 0              # declared in_pin count (0 = none declared)
+    out_pins: int = 0
+    in_pin_none: bool = False     # in_pin:none — no audio input
+    out_pin_none: bool = False    # out_pin:none — no audio output
+
+    @property
+    def is_instrument(self) -> bool:
+        """The official signal (v6.74+): 'instrument' in the tags: line."""
+        return "instrument" in self.tags
 
 
 _SLIDER = re.compile(r"^slider(\d+):(.*)$")
@@ -115,6 +143,21 @@ def parse_jsfx(text: str) -> JsfxSource:
             continue
         if line.startswith("desc:") and src.desc is None:
             src.desc = line[5:].strip()
+        if line.startswith("tags:"):
+            src.tags = line[5:].strip().lower().split()
+        m = re.match(r"^import\s+(\S+)", line)
+        if m:
+            src.imports.append(m.group(1))
+        m = re.match(r"^filename:\s*\d+\s*,\s*(.+?)\s*$", line)
+        if m:
+            src.filenames.append(m.group(1))
+        m = re.match(r"^(in|out)_pin:\s*(.+?)\s*$", line)
+        if m:
+            if m.group(2).lower() == "none":
+                setattr(src, f"{m.group(1)}_pin_none", True)
+            else:
+                setattr(src, f"{m.group(1)}_pins",
+                        getattr(src, f"{m.group(1)}_pins") + 1)
         m = re.match(r"^options:.*\bgmem=(\S+)", line)
         if m:
             src.gmem_namespace = m.group(1)
@@ -154,7 +197,7 @@ def parse_jsfx(text: str) -> JsfxSource:
     src.writes_audio = bool(re.search(
         r"\bspl(?:\d+\s*[-+*/|&~^]?=|\()",
         code.get("sample", "") + "\n" + code.get("block", "")))
-    src.uses_midi = bool(re.search(r"\bmidi(?:recv|send)", all_code))
+    src.uses_midi = bool(re.search(r"\bmidi(?:recv|send|syx)", all_code))
     src.gfx_functions = re.findall(r"\bfunction\s+([A-Za-z_][\w.]*)\s*\(",
                                    code.get("gfx", ""))
     outside = "\n".join(v for k, v in code.items() if k != "gfx")
@@ -162,6 +205,56 @@ def parse_jsfx(text: str) -> JsfxSource:
         f for f in src.gfx_functions
         if re.search(rf"\b{re.escape(f)}\s*\(", outside)]
     return src
+
+
+def collect_dependencies(subject: Path, *, _max: int = 64
+                         ) -> tuple[list[tuple[Path, str]], list[str]]:
+    """Resolve ``import``/``filename:`` references so the battery installs the
+    subject WITH the files it needs — a JSFX shipped with libraries imports
+    them relative to itself, and installing the bare file would fail its
+    compile even though the user's real install is fine.
+
+    Returns ``(deps, missing)``: deps as ``(source_path, install_relpath)``
+    preserving the reference layout (imports of imports are walked,
+    cycle-safe); missing as reference strings that do not exist next to the
+    subject — surfaced in the static stage, never silently. A reference may
+    escape the subject's directory by at most one level (the install root
+    sits one level below ``Effects/``); anything deeper is reported missing.
+    """
+    deps: list[tuple[Path, str]] = []
+    missing: list[str] = []
+    seen: set[Path] = set()
+
+    def norm_rel(cur_rel_dir: str, ref: str) -> str | None:
+        if os.path.isabs(ref):
+            return None
+        # forward slashes on every OS: the rel is an install path AND a JSFX
+        # import reference, both of which are '/'-portable (Windows normpath
+        # would emit backslashes — live-hit on the Windows leg)
+        rel = os.path.normpath(os.path.join(cur_rel_dir, ref)).replace(os.sep, "/")
+        return None if rel.startswith("../..") else rel
+
+    def walk(f: Path, rel_dir: str) -> None:
+        key = f.resolve()
+        if key in seen or len(deps) >= _max:
+            return
+        seen.add(key)
+        try:
+            src = parse_jsfx(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            return
+        for ref in src.imports + src.filenames:
+            rel = norm_rel(rel_dir, ref)
+            target = f.parent / ref
+            if rel is None or not target.is_file():
+                missing.append(ref)
+                continue
+            deps.append((target.resolve(), rel))
+            if ref.lower().endswith((".jsfx", ".jsfx-inc")):
+                walk(target, os.path.dirname(rel))
+
+    walk(subject, "")
+    return deps, missing
 
 
 # ---- battery -----------------------------------------------------------------
@@ -229,14 +322,15 @@ return chunk:match('(<JS .-\n>)') or ''
 
 
 def _stage_compile_and_params(subject: Path, source: JsfxSource, add,
-                              *, log) -> list[dict] | None:
+                              *, log, jsfx_install=None) -> list[dict] | None:
     """Compile proof + declared-vs-live param diff + factory-reset check.
 
     Returns the LIVE param list (dicts) on success, None when the subject
     did not insert (nothing further can run).
     """
     fx_add = f"JS:ReaProof/{subject.name}".replace("'", "\\'")
-    with ReaperSession(f"jsfxtest-{subject.stem}", jsfx=[subject]) as s:
+    with ReaperSession(f"jsfxtest-{subject.stem}",
+                       jsfx=jsfx_install or [subject]) as s:
         disc = s.eval(_INSERT_AND_DISCOVER.replace("__ADD__", fx_add), timeout=60)
         if not isinstance(disc, dict) or disc.get("fx", -1) < 0:
             add("compile: REAPER inserts and compiles the JSFX", "failed",
@@ -245,6 +339,16 @@ def _stage_compile_and_params(subject: Path, source: JsfxSource, add,
         live_params = disc.get("params") or []
 
         # -- compile proof: REAPER's own compiler message in the FX window ----
+        if not (s.env or {}).get("has_js_api"):
+            # reading the FX window needs js_ReaScriptAPI; without it the
+            # compile status is UNKNOWABLE here — skip honestly and keep the
+            # stages that need no window access (live-hit on Linux aarch64,
+            # where no js_ReaScriptAPI build exists)
+            add("compile: REAPER inserts and compiles the JSFX", "skipped",
+                message="compile proof reads the FX window via js_ReaScriptAPI "
+                        "— not present in this profile; install it to cover "
+                        "compilation")
+            return _params_and_reset_stages(s, source, add, fx_add, live_params)
         statics: list[str] = []
         floating = False
         deadline = time.monotonic() + 10.0
@@ -281,89 +385,96 @@ def _stage_compile_and_params(subject: Path, source: JsfxSource, add,
                      if desc_shown else
                      "no compiler error in the FX window (file declares no desc)"))
         s.eval("reaper.TrackFX_Show(reaper.GetTrack(0,0), 0, 2); return true")
+        return _params_and_reset_stages(s, source, add, fx_add, live_params)
 
-        # -- declared-vs-live param diff (validates the sweep mapping) --------
-        declared = [d.name for d in source.sliders]
-        live = [p.get("name", "") for p in live_params]
-        expected = declared + list(WRAPPER_PARAMS)
-        if live == expected:
-            add("params: declared sliders match live params", "passed",
-                message=f"{len(declared)} slider(s) "
-                        f"({sum(1 for d in source.sliders if d.hidden)} hidden) "
-                        f"+ wrapper {'/'.join(WRAPPER_PARAMS)}")
-        else:
-            add("params: declared sliders match live params", "failed",
-                message=f"declared {expected} but live {live} — the battery's "
-                        "slider→param mapping would be wrong; header parse and "
-                        "host disagree")
-            return None
 
-        # -- factory reset (catalog item 7) -----------------------------------
-        sweepable = [(i, d) for i, d in enumerate(source.sliders)
-                     if not d.is_file and d.lo is not None
-                     and d.hi is not None and d.hi != d.lo]
-        if not sweepable:
-            add("state: remove + re-add is factory reset", "skipped",
-                message="no range sliders to tweak — the chunk diff would be "
-                        "vacuous (nothing can change it)")
-            return live_params
-        gmem_note = ""
-        if source.gmem_namespace:
-            # gmem is freed when its LAST user detaches — removing the only
-            # instance would wipe the very state we are hunting. Attaching
-            # the bridge to the declared namespace emulates the concurrent
-            # instance / attached Lua that keeps it alive in the wild.
-            s.eval(f"reaper.gmem_attach('{source.gmem_namespace}'); return true",
-                   timeout=30)
-            gmem_note = (f" (battery attached to gmem namespace "
-                         f"'{source.gmem_namespace}' to emulate a concurrent "
-                         "instance)")
-        virgin = s.eval(_JS_BLOCK, timeout=30)
-        tweaks = "\n".join(
-            f"reaper.TrackFX_SetParam(tr, 0, {i}, {d.lo + (d.hi - d.lo) * 0.73:.6f})"
-            for i, d in sweepable)
-        s.eval("local tr = reaper.GetTrack(0,0)\n" + tweaks + "\nreturn true",
-               timeout=30)
-        tweaked = s.eval(_JS_BLOCK, timeout=30)
-        if tweaked == virgin:
-            # the oracle never registered the tweak — a pass here would be
-            # exactly the vacuous green §1.3 forbids
-            add("state: remove + re-add is factory reset", "failed",
-                message="chunk oracle VACUOUS — param tweaks did not change "
-                        "the FX chunk, so a clean diff proves nothing",
-                mutation_verified=False)
-            return live_params
-        ok = s.eval(r"""
-        local tr = reaper.GetTrack(0,0)
-        reaper.TrackFX_Delete(tr, 0)
-        return reaper.TrackFX_AddByName(tr, '__ADD__', false, -1) >= 0
-        """.replace("__ADD__", fx_add), timeout=30)
-        if not ok:
-            add("state: remove + re-add is factory reset", "failed",
-                message="re-add failed (TrackFX_AddByName < 0)")
-            return live_params
-        # @init of the fresh instance runs on the audio thread — poll the
-        # chunk through a settle window; ANY divergence from the virgin
-        # block is a leak, stability across the window is the reset proof
-        readd = None
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            readd = s.eval(_JS_BLOCK, timeout=30)
-            if readd != virgin:
-                break
-            time.sleep(0.25)
-        if readd == virgin:
-            add("state: remove + re-add is factory reset", "passed",
-                mutation_verified=True,
-                message="re-added FX chunk is byte-identical to the virgin "
-                        f"insert (tweak WAS visible to the oracle){gmem_note}")
-        else:
-            add("state: remove + re-add is factory reset", "failed",
-                mutation_verified=True,
-                message="state survived remove + re-add — leaking through "
-                        f"gmem/files/serialize{gmem_note}. "
-                        f"virgin={virgin!r:.120} re-added={str(readd)!r:.120}")
+def _params_and_reset_stages(s: ReaperSession, source: JsfxSource, add,
+                             fx_add: str, live_params: list[dict]
+                             ) -> list[dict] | None:
+    """Declared-vs-live param diff + factory-reset check (no js_ReaScriptAPI
+    needed — shared by the compile-pass and compile-skip paths)."""
+    # -- declared-vs-live param diff (validates the sweep mapping) ------------
+    declared = [d.name for d in source.sliders]
+    live = [p.get("name", "") for p in live_params]
+    expected = declared + list(WRAPPER_PARAMS)
+    if live == expected:
+        add("params: declared sliders match live params", "passed",
+            message=f"{len(declared)} slider(s) "
+                    f"({sum(1 for d in source.sliders if d.hidden)} hidden) "
+                    f"+ wrapper {'/'.join(WRAPPER_PARAMS)}")
+    else:
+        add("params: declared sliders match live params", "failed",
+            message=f"declared {expected} but live {live} — the battery's "
+                    "slider→param mapping would be wrong; header parse and "
+                    "host disagree")
+        return None
+
+    # -- factory reset (catalog item 7) ---------------------------------------
+    sweepable = [(i, d) for i, d in enumerate(source.sliders)
+                 if not d.is_file and d.lo is not None
+                 and d.hi is not None and d.hi != d.lo]
+    if not sweepable:
+        add("state: remove + re-add is factory reset", "skipped",
+            message="no range sliders to tweak — the chunk diff would be "
+                    "vacuous (nothing can change it)")
         return live_params
+    gmem_note = ""
+    if source.gmem_namespace:
+        # gmem is freed when its LAST user detaches — removing the only
+        # instance would wipe the very state we are hunting. Attaching
+        # the bridge to the declared namespace emulates the concurrent
+        # instance / attached Lua that keeps it alive in the wild.
+        s.eval(f"reaper.gmem_attach('{source.gmem_namespace}'); return true",
+               timeout=30)
+        gmem_note = (f" (battery attached to gmem namespace "
+                     f"'{source.gmem_namespace}' to emulate a concurrent "
+                     "instance)")
+    virgin = s.eval(_JS_BLOCK, timeout=30)
+    tweaks = "\n".join(
+        f"reaper.TrackFX_SetParam(tr, 0, {i}, {d.lo + (d.hi - d.lo) * 0.73:.6f})"
+        for i, d in sweepable)
+    s.eval("local tr = reaper.GetTrack(0,0)\n" + tweaks + "\nreturn true",
+           timeout=30)
+    tweaked = s.eval(_JS_BLOCK, timeout=30)
+    if tweaked == virgin:
+        # the oracle never registered the tweak — a pass here would be
+        # exactly the vacuous green §1.3 forbids
+        add("state: remove + re-add is factory reset", "failed",
+            message="chunk oracle VACUOUS — param tweaks did not change "
+                    "the FX chunk, so a clean diff proves nothing",
+            mutation_verified=False)
+        return live_params
+    ok = s.eval(r"""
+    local tr = reaper.GetTrack(0,0)
+    reaper.TrackFX_Delete(tr, 0)
+    return reaper.TrackFX_AddByName(tr, '__ADD__', false, -1) >= 0
+    """.replace("__ADD__", fx_add), timeout=30)
+    if not ok:
+        add("state: remove + re-add is factory reset", "failed",
+            message="re-add failed (TrackFX_AddByName < 0)")
+        return live_params
+    # @init of the fresh instance runs on the audio thread — poll the
+    # chunk through a settle window; ANY divergence from the virgin
+    # block is a leak, stability across the window is the reset proof
+    readd = None
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        readd = s.eval(_JS_BLOCK, timeout=30)
+        if readd != virgin:
+            break
+        time.sleep(0.25)
+    if readd == virgin:
+        add("state: remove + re-add is factory reset", "passed",
+            mutation_verified=True,
+            message="re-added FX chunk is byte-identical to the virgin "
+                    f"insert (tweak WAS visible to the oracle){gmem_note}")
+    else:
+        add("state: remove + re-add is factory reset", "failed",
+            mutation_verified=True,
+            message="state survived remove + re-add — leaking through "
+                    f"gmem/files/serialize{gmem_note}. "
+                    f"virgin={virgin!r:.120} re-added={str(readd)!r:.120}")
+    return live_params
 
 
 def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
@@ -384,18 +495,39 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         add("static: JSFX header parses", "failed", message=str(e)[:200])
         _emit(rs, out_dir, subject)
         return rs
+    deps, missing_refs = collect_dependencies(subject)
     bits = [f"{len(source.sliders)} slider(s)",
             f"sections: {', '.join('@' + s for s in source.sections) or 'none'}"]
+    if source.tags:
+        bits.append(f"tags: {' '.join(source.tags)}")
+    if source.in_pins or source.out_pins or source.in_pin_none or source.out_pin_none:
+        bits.append("pins: "
+                    f"{'none' if source.in_pin_none else source.in_pins} in / "
+                    f"{'none' if source.out_pin_none else source.out_pins} out")
+    if deps:
+        bits.append(f"installs {len(deps)} referenced file(s) "
+                    f"(import/filename): {[r for _, r in deps][:4]}")
     if source.gmem_namespace:
         bits.append(f"gmem namespace '{source.gmem_namespace}' declared "
                     "(gmem hygiene diff is the v2 slice)")
     if source.gfx_functions:
         bits.append(f"function(s) defined in @gfx: {', '.join(source.gfx_functions)}")
+    if missing_refs:
+        # a missing import WILL fail the compile proof next; a missing
+        # filename: resource may be written at runtime — named either way
+        add("static: JSFX header parses", "failed",
+            message="referenced file(s) not found next to the subject: "
+                    f"{missing_refs[:6]} — an import that cannot install "
+                    "cannot compile; ship the files alongside or fix the path")
+        _emit(rs, out_dir, subject)
+        return rs
     add("static: JSFX header parses", "passed", message="; ".join(bits))
+    jsfx_install = [(subject.resolve(), subject.name)] + deps
 
     # 2) compile proof + param diff + factory reset (one session) -------------
     log("compile proof + param mapping + factory reset…")
-    live_params = _stage_compile_and_params(subject, source, add, log=log)
+    live_params = _stage_compile_and_params(subject, source, add, log=log,
+                                            jsfx_install=jsfx_install)
     if live_params is None:
         _emit(rs, out_dir, subject)
         return rs
@@ -408,6 +540,15 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         rs.results[0].duration_s = time.monotonic() - t0
         _emit(rs, out_dir, subject)
         return rs
+    if source.out_pin_none:
+        add("audio: render battery", "skipped",
+            message="out_pin:none — the FX declares no audio output, so there "
+                    "is nothing for render assertions to measure")
+        rs.results[0].duration_s = time.monotonic() - t0
+        _emit(rs, out_dir, subject)
+        return rs
+    is_inst = opts.is_instrument or source.is_instrument or source.in_pin_none
+    channels = max(2, min(64, source.out_pins or 2))
 
     fx_name = f"JS:ReaProof/{subject.name}"
     sr = opts.sample_rate
@@ -424,8 +565,9 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         log(f"audio integrity at {sr} Hz…")
     for sname, sig in sigs.items() if opts.signals else ():
         try:
-            r = render_through_jsfx(fx_name, jsfx_files=[subject], input_signal=sig,
-                                    sample_rate=sr, name=f"jt-{subject.stem}-{sname}",
+            r = render_through_jsfx(fx_name, jsfx_files=jsfx_install, input_signal=sig,
+                                    sample_rate=sr, channels=channels,
+                                    name=f"jt-{subject.stem}-{sname}",
                                     render_timeout=opts.render_timeout)
             renders[sname] = r
         except Exception as e:  # noqa: BLE001 — crash/hang in render = fail (§1.7)
@@ -441,7 +583,7 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
             continue
         _mut_pathology(r.samples, hard_only, f"audio: {sname} is pathology-free",
                        add, artifacts=[str(r.output_path)])
-        if sname == "silence" and not opts.is_instrument and not source.uses_midi:
+        if sname == "silence" and not is_inst and not source.uses_midi:
             rms = A.rms_dbfs(r.samples)
             if rms <= -80.0:
                 add("audio: silence in -> silence out", "passed")
@@ -456,8 +598,9 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         for sname, sig in (("sine_1k", S.sine(1000.0, dbfs=-12.0, seconds=1.0, sr=xsr)),
                            ("noise", S.noise(dbfs=-12.0, seconds=1.0, sr=xsr))):
             try:
-                r = render_through_jsfx(fx_name, jsfx_files=[subject],
+                r = render_through_jsfx(fx_name, jsfx_files=jsfx_install,
                                         input_signal=sig, sample_rate=xsr,
+                                        channels=channels,
                                         name=f"jt-{subject.stem}-{sname}-{xsr}",
                                         render_timeout=opts.render_timeout)
             except Exception as e:  # noqa: BLE001
@@ -483,9 +626,9 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
         else:
             log("determinism…")
             try:
-                again = render_through_jsfx(fx_name, jsfx_files=[subject],
+                again = render_through_jsfx(fx_name, jsfx_files=jsfx_install,
                                             input_signal=sigs["sine_1k"],
-                                            sample_rate=sr,
+                                            sample_rate=sr, channels=channels,
                                             name=f"jt-{subject.stem}-determ",
                                             render_timeout=opts.render_timeout)
                 _mut_determinism(renders["sine_1k"].samples, again.samples,
@@ -516,9 +659,9 @@ def run_jsfx_battery(subject: Path, out_dir: Path | None = None,
                      + (" (hidden)" if source.sliders[idx].hidden else "")
                      + ": stable across range")
             try:
-                r = render_through_jsfx(fx_name, jsfx_files=[subject],
+                r = render_through_jsfx(fx_name, jsfx_files=jsfx_install,
                                         input_signal=noise, sample_rate=sr,
-                                        extra_setup=env,
+                                        channels=channels, extra_setup=env,
                                         name=f"jt-{subject.stem}-sweep{idx}",
                                         render_timeout=opts.render_timeout)
             except Exception as e:  # noqa: BLE001

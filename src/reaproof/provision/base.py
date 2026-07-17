@@ -110,12 +110,20 @@ class Provisioner(ABC):
             self.install_extensions(profile, extensions)
         return profile
 
-    def install_jsfx(self, profile: IsolatedProfile, files: list[Path]) -> None:
-        """Install JSFX into the profile's Effects/ tree (added as 'JS: <desc>')."""
-        dest = profile.resource_dir / "Effects" / "ReaProof"
-        dest.mkdir(parents=True, exist_ok=True)
+    def install_jsfx(self, profile: IsolatedProfile, files: list) -> None:
+        """Install JSFX into the profile's Effects/ tree (added as 'JS: <desc>').
+
+        Each entry is a ``Path`` (installed flat under its basename) or a
+        ``(Path, relpath)`` tuple — the relpath is preserved under the install
+        root so ``import lib/foo.jsfx-inc`` and ``filename:`` references keep
+        resolving exactly as they do next to the original file.
+        """
+        root = profile.resource_dir / "Effects" / "ReaProof"
         for f in files:
-            shutil.copy2(f, dest / Path(f).name)
+            src, rel = (f if isinstance(f, tuple) else (f, Path(f).name))
+            dest = root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
 
     def install_extensions(self, profile: IsolatedProfile, files: list[Path]) -> None:
         """Install native REAPER extensions-under-test into UserPlugins.

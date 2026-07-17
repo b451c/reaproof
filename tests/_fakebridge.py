@@ -38,6 +38,18 @@ class FakeBridge:
     def _atomic(self, path: Path, data: str) -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(data)
+        for _ in range(20):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                # Windows: a concurrent READER's open handle blocks the
+                # replace (no FILE_SHARE_DELETE) — the client polling
+                # heartbeat.json is exactly such a reader, and one EACCES
+                # must not kill the writer thread (verified live on the
+                # Windows VM: the real Windows bridge writer needs the same
+                # retry; recorded for the provisioner work).
+                time.sleep(0.002)
         os.replace(tmp, path)
 
     def start(self) -> "FakeBridge":

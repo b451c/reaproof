@@ -41,7 +41,10 @@ def test_stale_response_would_be_read_without_purge(tmp_path):
 
 
 def test_reset_run_dir_purges_queue_and_markers(tmp_path):
-    prov = get_provisioner()
+    try:
+        prov = get_provisioner()
+    except NotImplementedError as e:   # no provisioner for this OS yet (Windows)
+        pytest.skip(str(e))
     run_dir = tmp_path / "_reaproof"
     (run_dir / "cmd" / "in").mkdir(parents=True)
     (run_dir / "cmd" / "out").mkdir(parents=True)
@@ -65,7 +68,10 @@ def test_reset_run_dir_purges_queue_and_markers(tmp_path):
 @pytest.mark.slow
 @pytest.mark.gate
 def test_relaunch_returns_fresh_result_not_poison():
-    prov = get_provisioner()
+    try:
+        prov = get_provisioner()
+    except NotImplementedError as e:   # no provisioner for this OS yet (Windows)
+        pytest.skip(str(e))
     profile = prov.assemble_profile("relaunch-hygiene", DeterminismLock())
     handles = []
     try:

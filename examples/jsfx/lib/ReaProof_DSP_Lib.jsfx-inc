@@ -1,0 +1,7 @@
+// ReaProof reference LIBRARY - imported by ReaProof_Gain_Imports.jsfx.
+// Functions defined in the @init of an imported file become available to the
+// importing effect (official import semantics); shipping libraries next to
+// the effect is the standard JSFX packaging layout, which is why the battery
+// installs referenced files alongside the subject.
+@init
+function db2gain(db) ( 10^(db/20) );

@@ -100,7 +100,10 @@ def test_clap_zero_tests_is_not_a_pass():
 # ---- provisioner ------------------------------------------------------------
 
 def test_install_plugins_rejects_unknown_format(tmp_path):
-    prov = get_provisioner()
+    try:
+        prov = get_provisioner()
+    except NotImplementedError as e:   # no provisioner for this OS yet (Windows)
+        pytest.skip(str(e))
     with pytest.raises(ValueError, match="unsupported plugin format"):
         prov.assemble_profile("sweep-badfmt", DeterminismLock(),
                               plugins=[tmp_path / "thing.component"])
@@ -117,6 +120,9 @@ def test_launch_env_carries_clap_path_on_all_platforms(tmp_path):
         assert env["LC_NUMERIC"] == "C"          # determinism lock rides along
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="drives the Linux provisioner's POSIX signal path "
+                           "(no SIGKILL on Windows)")
 def test_linux_terminate_reaps_cfgfile_stragglers(tmp_path):
     """Straggler bound to the profile's unique cfgfile survives the main-pid
     kill — terminate must reap it (mirrors the macOS behaviour)."""

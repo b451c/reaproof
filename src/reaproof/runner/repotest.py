@@ -35,11 +35,11 @@ def _add(rs: ResultSet, log, name: str, status: str, **kw) -> None:
 
 
 def discover_packages(repo: Path) -> tuple[list[Path], list[Path]]:
-    """(packages, root_ignored): .lua/.eel files with a ReaPack header, split
-    by the in-a-category rule."""
+    """(packages, root_ignored): .lua/.eel/.jsfx files with a ReaPack header,
+    split by the in-a-category rule."""
     packages, root_ignored = [], []
     for f in sorted(repo.rglob("*")):
-        if f.suffix.lower() not in (".lua", ".eel") or not f.is_file():
+        if f.suffix.lower() not in (".lua", ".eel", ".jsfx") or not f.is_file():
             continue
         header = parse_reapack_header(
             f.read_text(encoding="utf-8", errors="replace"))
@@ -98,10 +98,20 @@ def run_repo_battery(repo: Path, out_dir: Path | None = None,
                      f"NOT covered this run")
     for pkg in run_list:
         rel = pkg.relative_to(repo)
-        sub = run_script_battery(
-            pkg, out_dir=(Path(out_dir) / str(rel).replace("/", "_"))
-            if out_dir else None,
-            opts=opts.script_opts or ScriptTestOptions(), log=lambda *_: None)
+        pkg_out = (Path(out_dir) / str(rel).replace("/", "_")) if out_dir else None
+        if pkg.suffix.lower() == ".jsfx":
+            # repo mode runs the STRUCTURAL JSFX stages (compile proof, param
+            # mapping, factory reset) — the full audio battery per package
+            # would multiply REAPER launches; run `reaproof test <pkg>` for it
+            from reaproof.runner.jsfxtest import JsfxTestOptions, run_jsfx_battery
+            sub = run_jsfx_battery(
+                pkg, out_dir=pkg_out,
+                opts=JsfxTestOptions(signals=False, sweep_params=False),
+                log=lambda *_: None)
+        else:
+            sub = run_script_battery(
+                pkg, out_dir=pkg_out,
+                opts=opts.script_opts or ScriptTestOptions(), log=lambda *_: None)
         worst = ("failed" if any(r.status == "failed" for r in sub.results)
                  else "passed")
         detail = "; ".join(f"{r.name.split(':')[0]}={r.status}"

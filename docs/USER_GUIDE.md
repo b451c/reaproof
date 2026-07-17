@@ -353,7 +353,10 @@ reaproof test SUBJECT [options]       Zero-code battery; dispatched by type:
                                         compile proof (REAPER's own compiler error
                                         surfaced), slider→param mapping (sparse +
                                         hidden), remove/re-add factory reset,
-                                        multi-samplerate renders, full-range sweep
+                                        multi-samplerate renders, full-range sweep;
+                                        import/filename: references are installed
+                                        alongside; tags: instrument + pin
+                                        declarations shape the audio checks
                                         --full | --max-params N | --no-sweep | --instrument
                                       .lua/.eel              script battery
                                         --ui  --expect-modifies-project  --expect-extstate
