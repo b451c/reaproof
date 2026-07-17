@@ -288,22 +288,25 @@ instead of silently killing. Gate: `tests/test_session_restart.py`.
 
 ## 7. Running in CI
 
-ReaProof ships GitHub Actions workflows (and works with any CI). The matrix covers OS × format × sample rate × DPI.
+ReaProof's own repository runs the real thing — copy `.github/workflows/ci.yml`
+as your starting point. What it does today (all of it real, none aspirational):
 
-```bash
-reaproof ci init --provider github
-# writes .github/workflows/reaproof.yml
-```
+- **units** — the platform-independent trust machinery + audio analysis on
+  ubuntu / macos / windows runners (Python 3.11 + 3.12).
+- **linux-battery** — provisions the pinned REAPER (Linux x86_64) and
+  js_ReaScriptAPI, then runs the full JSFX battery gates under Xvfb: a real
+  REAPER, real renders, the js-based compile proof included. This job GATES
+  merges (it went cloud-green first, then lost its `continue-on-error`).
 
-What the generated workflow does:
+For your own project the same pattern applies: install ReaProof, point
+`REAPROOF_REAPER_APP` at a provisioned REAPER, and run `reaproof test` /
+`pytest` under `xvfb-run` on Linux. macOS/Windows battery legs need a runner
+with a desktop session; the Windows control plane is verified but its hosted
+CI recipe is still being hardened.
 
-- **Linux job**: runs in a container with REAPER + Xvfb + validators baked in — the real GUI renders into a virtual framebuffer, so visual tests work headlessly. Multi-monitor is simulated with multiple virtual screens.
-- **Windows / macOS jobs**: run on runners with a real desktop session (required for GUI). The macOS job additionally verifies plugin **code signing / notarization** (an unsigned plugin failing to load would otherwise look like a test failure).
-- **Caching**: REAPER, validators, and goldens are cached.
-- **Artifacts**: every run uploads the full evidence bundle (audio, screenshots, diffs, logs, manifest) and the coverage report.
-- **Gate**: the build fails on any real failure; **flaky** tests are quarantined and reported but don't silently pass.
-
-Golden images live in your repo (`goldens/`, keyed per OS/DPI/theme). When a render legitimately changes, the diff is surfaced for review — goldens never auto-update silently (`reaproof goldens review` / `approve`).
+Golden images live in your repo (`goldens/`, keyed per OS/DPI/theme). When a
+render legitimately changes, the diff is surfaced for review — goldens never
+auto-update silently (`reaproof goldens list` / `approve`).
 
 ---
 
@@ -328,7 +331,7 @@ Open the HTML report (`reaproof report --open`). For each test you'll see:
 
 ## 9. Troubleshooting
 
-**"Plugin not found / not scanned."** ReaProof installs to the standard per-OS path and forces a rescan; if your build output is elsewhere, set `plugin.path` in `reaproof.toml`. On macOS, an unsigned/quarantined plugin won't load — `reaproof doctor --signing` checks signature/entitlements.
+**"Plugin not found / not scanned."** ReaProof installs subjects into a controlled scan path inside the isolated profile (CLAP rides the `CLAP_PATH` env var). On macOS, an unsigned/quarantined binary can silently refuse to load — ReaProof clears the quarantine bit on native-extension subjects it installs; for plugins, check `xattr -l` yourself if a load fails inexplicably.
 
 **"Visual test is flaky."** Almost always fonts, DPI, theme, or GPU rendering not pinned. ReaProof pins these by default; if you overrode a profile, restore the checked-in theme/fonts and ensure software rendering. Flaky tests are quarantined with both runs' images attached so you can see exactly what differed.
 
@@ -336,9 +339,9 @@ Open the HTML report (`reaproof report --open`). For each test you'll see:
 
 **"pluginval fails on my multi-bus VST3."** Known pluginval limitation for some multi-bus VST3 instruments; ReaProof falls back to the Steinberg VST3 validator for those — see the log.
 
-**"Linux CI: GUI tests do nothing."** Ensure the job uses the ReaProof container (with Xvfb) or wrap with `xvfb-run`; on a Wayland host force `XDG_SESSION_TYPE=x11`.
+**"Linux CI: GUI tests do nothing."** Wrap the run with `xvfb-run -a` (see the shipped `linux-battery` job); on a Wayland desktop, X clients need `DISPLAY` plus the XWayland auth cookie (`pgrep -a Xwayland` shows the `-auth` path).
 
-**"Tests are slow."** Use `--skip-gui-tests` for pure-DSP legs, lower `strictness` for quick runs (raise it in nightly), and rely on caching. Visual + interaction legs are the expensive ones; gate them to the platforms/DPIs you ship.
+**"Tests are slow."** Use `reaproof test <subject> --quick` (structural stages, ~10 s) in your edit loop and run the full battery before release; for authored suites, select with pytest `-m`/`-k` markers. Visual + interaction legs are the expensive ones; gate them to the platforms/DPIs you ship.
 
 ---
 
