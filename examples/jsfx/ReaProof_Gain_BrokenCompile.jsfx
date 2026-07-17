@@ -1,0 +1,30 @@
+desc:ReaProof Gain BROKEN (does not compile)
+// Deliberately-broken variant for the JSFX battery: db2gain() is DEFINED in
+// @gfx but CALLED from @slider. JSFX compiles @gfx after the other sections,
+// so the reference is undefined and the WHOLE file fails to compile — yet
+// REAPER still inserts it, still lists the declared sliders as live params,
+// and passes audio through bit-exact (catalog item 1, mequaz, forum t=310135
+// post #5; failure mode live-verified on REAPER 7.75). Only the FX window
+// carries the compiler error text — which is exactly what the battery reads.
+
+slider1:0<-24,24,0.01>Gain (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+gain = 1;
+
+@slider
+gain = db2gain(slider1);
+
+@sample
+spl0 *= gain;
+spl1 *= gain;
+
+@gfx 100 60
+function db2gain(db) ( 10^(db/20) );
+gfx_x = 4; gfx_y = 4;
+gfx_printf("%.2f dB", slider1);

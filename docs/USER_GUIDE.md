@@ -349,6 +349,12 @@ reaproof setup                        Describe/verify provisioning
 reaproof test SUBJECT [options]       Zero-code battery; dispatched by type:
                                       .clap/.vst3/.vst/.lv2  plugin battery
                                         --full | --max-params N | --no-sweep | --instrument
+                                      .jsfx                  JSFX battery
+                                        compile proof (REAPER's own compiler error
+                                        surfaced), slider→param mapping (sparse +
+                                        hidden), remove/re-add factory reset,
+                                        multi-samplerate renders, full-range sweep
+                                        --full | --max-params N | --no-sweep | --instrument
                                       .lua/.eel              script battery
                                         --ui  --expect-modifies-project  --expect-extstate
                                       reaper_*.dylib         extension battery

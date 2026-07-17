@@ -1,7 +1,15 @@
 desc:ReaProof Gain BROKEN (NaN at extreme)
 // Deliberately-broken variant of Subject #1: applies gain normally, but at high
-// settings (>= +18 dB) it emits a non-finite value (0/0 = NaN). Used to PROVE the
-// audio pathology detector FAILS a NaN-producing build (§1.7) rather than skipping it.
+// settings (>= +18 dB) it TRIES to poison the stream with 0/0.
+//
+// What actually happens (live-verified, REAPER 7.75): EEL2 guards division —
+// 0/0 evaluates to 0, and the JSFX host additionally scrubs non-finite output
+// to 0 and clamps |spl| to 1.0. A JSFX therefore CANNOT deliver NaN/Inf to
+// the graph; the observable pathology of this build at extreme gain is the
+// hard-clamped (flat-topped) waveform, which the pathology detector fails as
+// a "click" discontinuity (§1.7). The desc keeps its historical name — the
+// gate it feeds (phase 1) proves pathology detection fails a broken build,
+// whatever the pathology's final shape.
 
 slider1:0<-24,24,0.01>Gain (dB)
 
@@ -18,7 +26,8 @@ nanmode = (slider1 >= 18) ? 1 : 0;
 spl0 *= gain;
 spl1 *= gain;
 nanmode ? (
-  // 0/0 is NaN in EEL2: poison the stream at extreme gain.
+  // 0/0 is 0 in EEL2 (guarded); the breakage that SURVIVES the host's
+  // sanitizer is the clamp-clipped output of the boosted signal.
   spl0 += 0/0;
   spl1 += 0/0;
 );

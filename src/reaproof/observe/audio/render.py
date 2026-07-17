@@ -81,11 +81,14 @@ def render_through_jsfx(
     lock: DeterminismLock | None = None,
     extra_setup: str = "",
     name: str = "render",
+    render_timeout: float = 120.0,
 ) -> RenderResult:
     """Render ``input_signal`` through a JSFX with the given parameter values.
 
     ``extra_setup`` is a Lua snippet run after the FX is added (with ``tr`` and ``fx``
     in scope) — e.g. to attach a parameter automation envelope before rendering.
+    ``render_timeout`` bounds the offline render; a stalled audio thread (runaway
+    JSFX loop) surfaces as the TimeoutError instead of wedging the suite.
     """
     lock = lock or DeterminismLock(sample_rate=sample_rate)
     params = params or {}
@@ -123,7 +126,7 @@ def render_through_jsfx(
     if isinstance(built, dict) and built.get("err"):
         raise RuntimeError(f"render build failed: {built['err']}")
 
-    _offline_render(rpp, prof.ini_path, out)
+    _offline_render(rpp, prof.ini_path, out, timeout=render_timeout)
     data, osr = sf.read(out, dtype="float64", always_2d=True)
 
     provenance = {

@@ -1,0 +1,29 @@
+desc:ReaProof Sparse (sliders 1/5/40, one hidden)
+// GOOD reference subject for the JSFX battery's slider→param mapping checks:
+// slider numbers are sparse (1, 5, 40) yet REAPER exposes them as DENSE param
+// indices 0/1/2 in slider-number order, and the '-'-prefixed slider40 is
+// hidden from the UI but is STILL a real, automatable param (catalog item 6,
+// mequaz: resolve by name, never slider#-1; sweep hidden sliders too).
+
+slider1:0<-24,24,0.01>Gain (dB)
+slider5:1<0,1,0.01>Mix
+slider40:1<0.25,4,0.01>-Drive scale
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+gain = 1; mix = 1; drive = 1;
+
+@slider
+gain = 10^(slider1/20);
+mix = slider5;
+drive = slider40;
+
+@sample
+wet0 = spl0 * gain * drive;
+wet1 = spl1 * gain * drive;
+spl0 = spl0 * (1 - mix) + wet0 * mix;
+spl1 = spl1 * (1 - mix) + wet1 * mix;

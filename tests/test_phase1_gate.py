@@ -77,7 +77,11 @@ def test_broken_ignore_build_fails_dsp_assertion():
 
 @pytest.mark.negative_control
 def test_nan_build_is_failed_not_skipped():
-    """A build that emits NaN at extreme gain is FAILED via pathology detection (§1.7)."""
+    """A build that BLOWS UP at extreme gain is FAILED via pathology detection
+    (§1.7). Note the true mechanism (live-verified while building the JSFX
+    battery): EEL2 guards 0/0 to 0 and the JSFX host scrubs non-finite output
+    and clamps |spl| to 1.0, so no NaN ever reaches the render — the pathology
+    that fires here is the CLICK discontinuity of the hard-clamped waveform."""
     r = render_through_jsfx("JS: ReaProof Gain BROKEN (NaN at extreme)",
                             jsfx_files=JSFX, params={0: 24.0}, input_signal=INPUT,
                             sample_rate=SR, name="p1nan")

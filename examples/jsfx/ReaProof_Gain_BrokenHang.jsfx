@@ -1,0 +1,33 @@
+desc:ReaProof Gain BROKEN (stalls at extreme)
+// Deliberately-broken variant for the JSFX battery's parameter sweep: at high
+// gain settings (>= +18 dB) @sample enters a nested runaway loop and the
+// audio thread stalls — the classic real-world JSFX failure mode (unbounded
+// while()/file_avail() read loops; catalog items 4/9 territory). A JSFX
+// cannot emit NaN/Inf into the graph (the host scrubs non-finite output and
+// clamps to ±1 — live-verified on 7.75), so a STALL is the honest way a
+// sweep-reachable extreme breaks a render: the offline render never
+// completes and the battery fails it via its crash/hang timeout (§1.7).
+// The loops are nested so any per-loop iteration cap cannot save the render.
+
+slider1:0<-24,24,0.01>Gain (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@slider
+gain = 10^(slider1/20);
+stall = (slider1 >= 18) ? 1 : 0;
+
+@sample
+stall ? (
+  i = 0;
+  while (i < 100000000) (
+    j = 0;
+    while (j < 100000000) ( j += 1; );
+    i += 1;
+  );
+);
+spl0 *= gain;
+spl1 *= gain;

@@ -1,0 +1,30 @@
+desc:ReaProof Gain BROKEN (state survives re-add)
+// Deliberately-broken variant for the JSFX battery's factory-reset check
+// (catalog item 7, mequaz): the last non-zero slider value leaks OUT through
+// gmem — session-volatile, shared across every instance on the namespace —
+// and a freshly-added instance leaks it back IN via @init, writing it over
+// its own slider default. Remove + re-add is therefore NOT a factory reset:
+// the re-added instance's chunk carries the previous instance's value.
+// (Live-verified mechanics: an @init slider write propagates to the wrapper
+// param AND the track-chunk slider line; the leak-out is guarded on != 0 so
+// a fresh instance's default does not wipe the smuggled value.)
+
+options:gmem=ReaProofLeak
+
+slider1:0<-24,24,0.01>Gain (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+gmem[0] != 0 ? slider1 = gmem[0];   // leak IN: a previous instance's value
+
+@slider
+gain = 10^(slider1/20);
+slider1 != 0 ? gmem[0] = slider1;   // leak OUT: survives this instance
+
+@sample
+spl0 *= gain;
+spl1 *= gain;
