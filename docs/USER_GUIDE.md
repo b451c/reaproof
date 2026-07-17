@@ -1,6 +1,6 @@
 # ReaProof — User Guide
 
-> **As-built note (2026-07-16, v0.3.0).** Accurate today: the zero-code batteries
+> **As-built note (2026-07-17).** Accurate today: the zero-code batteries
 > (`reaproof test`, `reaproof test-repo`), the agent-authoring flow (`author`,
 > `features-report`), `doctor`, `run`, `goldens`, `init` — see §10 for the real CLI.
 > The spec-authoring tutorial (§3–§6) is real, but only the `knob` generator is
@@ -29,11 +29,11 @@ If you are building the platform itself, start from the test suite — it demons
 
 ## 1. What you can test
 
-- **Plugins:** VST2, VST3, CLAP, LV2, JSFX (AU via auval/pluginval)
+- **Plugins:** VST2, VST3, CLAP, LV2, AU (.component), JSFX
 - **Native extensions:** REAPER C/C++ extensions (actions, API functions)
-- **Scripts:** Lua / EEL2 ReaScripts and ReaImGui UIs
+- **Scripts:** Lua / EEL2 / Python ReaScripts and ReaImGui UIs
 - **Themes:** .ReaperThemeZip (structural lint + live load + paint proof)
-- **ReaPack repositories:** metadata rules + per-package batteries
+- **ReaPack repositories:** metadata rules + per-package batteries (scripts + JSFX)
 
 Each subject type has a **zero-code battery** (`reaproof test <subject>`, `reaproof test-repo <dir>`) plus spec-level oracles for semantic checks (macOS today; see the README for platform status):
 
@@ -79,7 +79,8 @@ The fastest path is the zero-code battery — no files to write at all:
 
 ```bash
 reaproof doctor
-reaproof test /path/to/MyPlugin.clap      # or .vst3/.lv2/.lua/reaper_*.dylib/.ReaperThemeZip
+reaproof test /path/to/MyPlugin.clap      # or .vst3/.lv2/.component/.jsfx/
+                                          #    .lua/.eel/.py/reaper_*.dylib/.ReaperThemeZip
 open .cache/runs/autotest-MyPlugin/report.html
 ```
 

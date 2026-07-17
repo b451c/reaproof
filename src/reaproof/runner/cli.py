@@ -207,7 +207,8 @@ def cmd_author(args) -> int:
     from reaproof.coverage.features import scaffold
     stype = {".lua": "script", ".eel": "script", ".dylib": "extension",
              ".clap": "plugin", ".vst3": "plugin", ".vst": "plugin",
-             ".lv2": "plugin", ".jsfx": "jsfx",
+             ".lv2": "plugin", ".component": "plugin", ".jsfx": "jsfx",
+             ".py": "script",
              ".reaperthemezip": "theme", ".reapertheme": "theme",
              }.get(subject.suffix.lower(), "script")
     manifest = Path(args.out or (subject.parent / "reaproof_features.json"))

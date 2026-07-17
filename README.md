@@ -5,14 +5,16 @@
 ![license: MIT](https://img.shields.io/badge/license-MIT-green)
 ![version](https://img.shields.io/badge/version-0.3.0-blue)
 
-> **Platform: macOS today.** On Linux the platform-independent layers (trust
-> machinery, audio analysis) run in CI; the REAPER-driven planes are implemented
-> (`provision/linux.py`) but not yet verified there. **Windows: not yet.**
+> **Platform: macOS today (full batteries).** Linux: the control plane and the
+> offline render pipeline are live-verified against a real REAPER (structural
+> JSFX battery runs green); the CI leg is being wired. Windows: the control
+> plane (provisioner + bridge) is live-verified; renders and the full
+> batteries are in progress.
 
 **Trustworthy, automated testing for everything you build for REAPER — compiled
-plugins (CLAP / VST / VST3 / LV2), ReaScripts, native extensions, JSFX, themes,
-and whole ReaPack repositories — by driving a real REAPER and asserting on the
-observable effect.**
+plugins (CLAP / VST / VST3 / LV2 / AU), JSFX, ReaScripts (Lua / EEL2 / Python),
+native extensions, themes, and whole ReaPack repositories — by driving a real
+REAPER and asserting on the observable effect.**
 
 ReaProof loads your subject into a clean, isolated REAPER instance, drives it
 the way a user would, renders real audio, captures real pixels from the real
@@ -60,10 +62,12 @@ open .cache/runs/autotest-*/report.html
 | Subject | Battery |
 |---|---|
 | **CLAP / VST / VST3 / LV2** | format-validator conformance (clap-validator / pluginval / lv2_validate), loads in a real REAPER, every host-exposed parameter swept across its full range via automation envelopes (no NaN / Inf / denormal storms / crashes at any setting), deterministic re-render, silence-in → silence-out |
-| **ReaScript (.lua / .eel)** | optional `luacheck`, ReaPack header lint, load-time errors captured with the real Lua message, deferred-phase runtime errors detected (even though REAPER halts the script engine on them), undeclared state leaks named (tracks, items, dirty flag, ExtState, windows), registers and runs as a real action, `--ui` window check |
+| **JSFX (.jsfx)** | compile proof surfacing REAPER's own compiler error text (a broken JSFX inserts silently), `import`/`filename:` references installed alongside, slider→param mapping (sparse + hidden), remove/re-add factory reset incl. serialized state, repeated-save serialize stability, truncated-restore-to-defaults, previous-release chunk compatibility (opt-in), multi-samplerate renders, full-range sweeps, deterministic MIDI note feed for instruments |
+| **AU (.component)** | AudioComponents manifest, per-plugin `auval` conformance, semi-hermetic registration (AU discovery is system-wide — stated, cleaned up), loads in a real REAPER, render + bit-identical re-render |
+| **ReaScript (.lua / .eel / .py)** | optional `luacheck`, ReaPack header lint (`--`/`//`/`#` comments), load-time errors captured with the real Lua message, deferred-phase runtime errors detected (even though REAPER halts the script engine on them), undeclared state leaks named (tracks, items, dirty flag, ExtState, windows, **gmem namespaces**), registers and runs as a real action (Python via the host-mirrored interpreter config), `--ui` window check |
 | **Native extension (reaper_*.dylib)** | naming contract, load attempt proven from REAPER's own startup log, registration proven by an observable diff (actions + API functions) against a pristine instance, honest warning for hook-only extensions, opt-in `--run-actions` smoke under full supervision |
 | **Theme (.ReaperThemeZip)** | structural lint (layout, every image decodes), live load with read-back, and a **paint proof** — main-window pixels must actually change |
-| **ReaPack repository** | `reapack-index --check` metadata validation (when installed), package-layout rules enforced, per-package script batteries with a logged budget cap |
+| **ReaPack repository** | `reapack-index --check` metadata validation (when installed), package-layout rules enforced, per-package script and JSFX batteries with a logged budget cap |
 
 Under every battery runs the **universal watchdog plane**: crash forensics
 (macOS diagnostic reports collected as named evidence), a modal-dialog monitor
