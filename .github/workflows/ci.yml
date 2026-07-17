@@ -33,7 +33,8 @@ jobs:
   linux-battery:
     name: Linux battery (REAPER under Xvfb)
     runs-on: ubuntu-latest
-    continue-on-error: true      # provisioning still being hardened in cloud CI
+    # cloud-green since run 29618505831 (full JSFX gates incl. the js-based
+    # compile proof) — this job now gates merges like any other
     env:
       REAPER_VER: "7.75"
     steps:
