@@ -1,8 +1,12 @@
 name: ci
 
-# The platform-independent trust machinery + audio analysis run on every OS. The
-# REAPER-driven gates need a provisioned REAPER + display; running them in CI is a TODO
-# (the provisioner uses a locally-provisioned REAPER - see the README/USER_GUIDE).
+# The platform-independent trust machinery + audio analysis run on every OS
+# (now incl. Windows — the Windows control plane + render pipeline are
+# live-verified). The REAPER-driven battery runs on Linux under Xvfb: the
+# control plane and offline render are live-verified on a Linux host, and this
+# job promotes that to CI. It is continue-on-error while the cloud
+# provisioning is hardened, so it never blocks a merge — flip that off once it
+# is reliably green.
 
 on:
   push:
@@ -15,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -25,3 +29,40 @@ jobs:
       - run: pip install -e .
       - name: Trust machinery + analysis (platform-independent)
         run: python -m pytest tests/ -m "not reaper and not slow" -q
+
+  linux-battery:
+    name: Linux battery (REAPER under Xvfb)
+    runs-on: ubuntu-latest
+    continue-on-error: true      # provisioning still being hardened in cloud CI
+    env:
+      REAPER_VER: "7.75"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -e .
+      - name: System deps (Xvfb + GTK + GL)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libxml2 xdotool xdg-utils \
+            libsdl2-2.0-0 libgl1-mesa-dri
+      - name: Provision pinned REAPER (Linux x86_64)
+        run: |
+          mkdir -p .cache/reaper775_linux
+          curl -fsSL "https://www.reaper.fm/files/${REAPER_VER%.*}.x/reaper$(echo $REAPER_VER | tr -d .)_linux_x86_64.tar.xz" \
+            -o /tmp/reaper.tar.xz
+          tar -xf /tmp/reaper.tar.xz -C .cache/reaper775_linux --strip-components=1
+          test -x .cache/reaper775_linux/REAPER/reaper
+      - name: Provision js_ReaScriptAPI (x86_64) into the user plugins dir
+        run: |
+          # the x86_64 Linux build exists (unlike aarch64) — it enables the
+          # JSFX compile-proof and the visual plane in CI
+          mkdir -p "$HOME/.config/REAPER/UserPlugins"
+          curl -fsSL "https://github.com/cfillion/reaper_js_ReaScriptAPI/releases/latest/download/reaper_js_ReaScriptAPI-x86_64.so" \
+            -o "$HOME/.config/REAPER/UserPlugins/reaper_js_ReaScriptAPI64.so" || \
+            echo "js provisioning failed — compile-proof will skip honestly"
+      - name: JSFX battery under Xvfb
+        run: |
+          export REAPROOF_REAPER_APP="$PWD/.cache/reaper775_linux/REAPER/reaper"
+          xvfb-run -a --server-args="-screen 0 1920x1080x24" \
+            python -m pytest tests/test_jsfx_battery.py -m "reaper and not slow" -q

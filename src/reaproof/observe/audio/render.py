@@ -45,8 +45,8 @@ def _offline_render(rpp: Path, ini: Path, out: Path, *, timeout: float = 120.0,
 
     ``clap_path`` (when given) is exported as ``CLAP_PATH`` so the separate render
     process discovers the controlled subject CLAP exactly as the bridge launch did.
-    macOS goes through ``open -n`` (app bundle); Linux execs the pinned binary
-    directly (live-verified on the Linux leg).
+    macOS goes through ``open -n`` (app bundle); Linux and Windows exec the
+    pinned binary directly (both live-verified on their VM legs).
     """
     import sys
     if out.exists():
@@ -58,6 +58,11 @@ def _offline_render(rpp: Path, ini: Path, out: Path, *, timeout: float = 120.0,
     if sys.platform == "darwin":
         subprocess.run(["open", "-n", str(paths.REAPER_APP), "--args", *args],
                        check=True, env=subprocess_env(extra), timeout=30)
+    elif sys.platform == "win32":
+        from reaproof.provision.windows import REAPER_EXE_WINDOWS
+        subprocess.Popen([str(REAPER_EXE_WINDOWS), *args],
+                         env=subprocess_env(extra),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         from reaproof.provision.linux import REAPER_BIN_LINUX
         subprocess.Popen([str(REAPER_BIN_LINUX), *args],
@@ -75,7 +80,22 @@ def _offline_render(rpp: Path, ini: Path, out: Path, *, timeout: float = 120.0,
             time.sleep(0.3)
         raise TimeoutError(f"render produced no output within {timeout}s: {out}")
     finally:
-        subprocess.run(["pkill", "-9", "-f", f"cfgfile {ini}"], capture_output=True)
+        _reap_render(ini)
+
+
+def _reap_render(ini: Path) -> None:
+    """Kill the straggler render process bound to our unique cfgfile."""
+    import sys
+    if sys.platform == "win32":
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name='reaper.exe'\" | "
+             f"Where-Object {{ $_.CommandLine -like '*{str(ini)}*' }} | "
+             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
+            capture_output=True, timeout=30)
+    else:
+        subprocess.run(["pkill", "-9", "-f", f"cfgfile {ini}"],
+                       capture_output=True)
 
 
 #: the deterministic reference note clip for instrument subjects:

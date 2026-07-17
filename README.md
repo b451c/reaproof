@@ -1,15 +1,17 @@
 # ReaProof
 
 ![platform: macOS](https://img.shields.io/badge/platform-macOS-informational)
-![Windows / Linux: WIP](https://img.shields.io/badge/Windows%20%2F%20Linux-WIP-lightgrey)
+![Windows / Linux: batteries verified](https://img.shields.io/badge/Windows%20%2F%20Linux-batteries%20verified-yellow)
 ![license: MIT](https://img.shields.io/badge/license-MIT-green)
 ![version](https://img.shields.io/badge/version-0.4.0-blue)
 
-> **Platform: macOS today (full batteries).** Linux: the control plane and the
-> offline render pipeline are live-verified against a real REAPER (structural
-> JSFX battery runs green); the CI leg is being wired. Windows: the control
-> plane (provisioner + bridge) is live-verified; renders and the full
-> batteries are in progress.
+> **Platform: macOS (full batteries), Linux + Windows (batteries verified,
+> CI being wired).** The control plane, the offline render pipeline, and the
+> full JSFX battery are live-verified against a real REAPER on **all three**
+> OSes — on Linux and Windows a real render applies its gain exactly and
+> re-renders bit-identically. What remains per-OS: provisioning js_ReaScriptAPI
+> in CI (the compile-proof + visual plane; the x86_64 Linux build exists),
+> and promoting the verified battery to cloud CI.
 
 **Trustworthy, automated testing for everything you build for REAPER — compiled
 plugins (CLAP / VST / VST3 / LV2 / AU), JSFX, ReaScripts (Lua / EEL2 / Python),
