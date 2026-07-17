@@ -56,9 +56,10 @@ jobs:
       - name: Provision js_ReaScriptAPI (x86_64) into the user plugins dir
         run: |
           # the x86_64 Linux build exists (unlike aarch64) — it enables the
-          # JSFX compile-proof and the visual plane in CI
+          # JSFX compile-proof and the visual plane in CI. Source of truth:
+          # juliansader/ReaExtensions (same files ReaPack serves).
           mkdir -p "$HOME/.config/REAPER/UserPlugins"
-          curl -fsSL "https://github.com/cfillion/reaper_js_ReaScriptAPI/releases/latest/download/reaper_js_ReaScriptAPI-x86_64.so" \
+          curl -fsSL "https://raw.githubusercontent.com/juliansader/ReaExtensions/master/js_ReaScriptAPI/v1.310/reaper_js_ReaScriptAPI64.so" \
             -o "$HOME/.config/REAPER/UserPlugins/reaper_js_ReaScriptAPI64.so" || \
             echo "js provisioning failed — compile-proof will skip honestly"
       - name: JSFX battery under Xvfb

@@ -20,7 +20,16 @@ from reaproof import paths
 
 pytestmark = [pytest.mark.reaper, pytest.mark.slow]
 
-JSFX = sorted((paths.EXAMPLES / "jsfx").glob("ReaProof_Gain*.jsfx"))
+# EXACTLY the gain-family fixtures this gate references — NOT a glob. A glob
+# over ReaProof_Gain*.jsfx would also pull in the JSFX-battery fixtures added
+# later (BrokenCompile, BrokenImport, …); installing a non-compiling variant
+# alongside makes TrackFX_AddByName("JS: ReaProof Gain") resolve ambiguously.
+JSFX = [paths.EXAMPLES / "jsfx" / n for n in (
+    "ReaProof_Gain.jsfx",
+    "ReaProof_Gain_BrokenIgnore.jsfx",
+    "ReaProof_Gain_BrokenNaN.jsfx",
+    "ReaProof_Gain_BrokenAngle.jsfx",
+)]
 SR = 48000
 INPUT = S.sine(1000, dbfs=-12.0, seconds=2.0, sr=SR)   # peak -12 => RMS -15.01 dBFS
 IN_RMS = A.rms_dbfs(INPUT)

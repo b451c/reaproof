@@ -482,7 +482,10 @@ def _params_and_reset_stages(s: ReaperSession, source: JsfxSource, add,
     # chunk through a settle window; ANY divergence from the virgin
     # block is a leak, stability across the window is the reset proof
     readd = None
-    deadline = time.monotonic() + 3.0
+    # 8 s, not less: a loaded CI runner needs several seconds before the
+    # audio-thread @init of the re-added instance lands in the chunk (a 3 s
+    # window let a leak slip past as a false green on a slow host)
+    deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline:
         readd = s.eval(_JS_BLOCK, timeout=30)
         if readd != virgin:
